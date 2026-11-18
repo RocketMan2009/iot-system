@@ -23,6 +23,8 @@ export function initDashboard() {
 
   form.addEventListener('submit', e => { e.preventDefault(); connect(form); });
   $('mqtt-disconnect').addEventListener('click', disconnect);
+  $('mon-form').addEventListener('submit', e => { e.preventDefault(); subscribeMonitor($('mon-filter').value.trim() || '#'); });
+  $('mon-clear').addEventListener('click', () => $('mon-log').replaceChildren());
   setInterval(() => devices.size && render(), 15000);   // refresh "last seen" texts
 }
 
@@ -56,6 +58,8 @@ function connect(form) {
     $('mqtt-connect').disabled = true;
     $('mqtt-disconnect').disabled = false;
     client.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`], { qos: 1 });
+    monitorFilter = null;
+    subscribeMonitor($('mon-filter').value.trim() || '#');
   });
   client.on('reconnect', () => setPill($('mqtt-status'), 'Reconnecting…', 'busy'));
   client.on('offline', () => setPill($('mqtt-status'), 'Offline', 'err'));
@@ -76,10 +80,15 @@ function dev(id) {
   return devices.get(id);
 }
 
-function onMessage(topic, payload) {
+function onMessage(topic, payload, packet) {
+  const text = payload.toString();
+  logMonitor(topic, text, packet?.retain);
+
+  // Everything below is device discovery/state, which only looks at our own base topic.
+  if (!topic.startsWith(`${base}/`)) return;
   const rest = topic.slice(base.length + 1).split('/');   // [id, kind, ...]
   const [id, kind] = rest;
-  const text = payload.toString();
+  if (!['info', 'status', 'telemetry', 'relay'].includes(kind) || (kind === 'relay' && rest[3] !== 'state')) return;
 
   // empty retained payload = device was "forgotten"
   if (text === '' && (kind === 'info' || kind === 'status')) {
@@ -105,6 +114,121 @@ function onMessage(topic, payload) {
     if (d.pending[ch]) { clearTimeout(d.pending[ch]); delete d.pending[ch]; }
   }
   render();
+}
+
+// ---------- MQTT monitor ----------
+// Shows all traffic and checks command topics against discovered boards, so a command
+// from an external app that the board never receives (wrong case, extra "/", other id) is obvious.
+let monitorFilter = null;
+const awaiting = new Map();   // "<prefix>/relay/<ch>" -> { note, t0, timer }
+const lastState = new Map();  // "<prefix>/relay/<ch>" -> { text, t }
+const VALID_CMD = /^(on|off|toggle|1|0|true|false)$/i;
+let lastMsg = { key: '', t: 0 };
+
+function subscribeMonitor(filter) {
+  if (!client?.connected) return toast('ยังไม่ได้เชื่อมต่อ broker');
+  if (monitorFilter && monitorFilter !== filter) client.unsubscribe(monitorFilter);
+  monitorFilter = filter;
+  client.subscribe(filter, { qos: 0 }, (err, granted) => {
+    const denied = err || granted?.some(g => g.qos === 128);
+    monitorNote(denied
+      ? `✘ subscribe "${filter}" ไม่สำเร็จ — บัญชีนี้อาจไม่มีสิทธิ์ (permission) ลองใช้ "${base}/#"`
+      : `✔ กำลังดูข้อความใน "${filter}"`, denied ? 'bad' : 'ok');
+  });
+}
+
+function monitorNote(text, cls) {
+  const log = $('mon-log');
+  if (log.firstElementChild?.classList.contains('muted')) log.replaceChildren();
+  log.append(el('div', { class: `mon-row` }, el('span', { class: 't' }, time()), el('span'), el('span', { class: `note ${cls}` }, text)));
+  log.scrollTop = log.scrollHeight;
+}
+
+const time = () => new Date().toLocaleTimeString([], { hour12: false });
+
+function logMonitor(topic, text, retained) {
+  // overlapping subscriptions can deliver the same message twice
+  const key = `${topic}\u0000${text}`;
+  if (key === lastMsg.key && Date.now() - lastMsg.t < 50) return;
+  lastMsg = { key, t: Date.now() };
+
+  const isCmd = /\/relay\/[^/]*\/set\s*$/i.test(topic) || /\/cmd\s*$/i.test(topic);
+  const isState = /\/relay\/[^/]+\/state$/.test(topic);
+  const note = isCmd ? checkCommand(topic, text) : null;
+  if (isState && !retained) resolveAwaiting(topic, text);   // retained = old value, not a reply
+  if ($('mon-pause').checked) return;
+
+  const log = $('mon-log');
+  if (log.firstElementChild?.classList.contains('muted')) log.replaceChildren();
+  const row = el('div', { class: `mon-row ${isCmd ? 'cmd' : isState ? 'st' : ''}` },
+    el('span', { class: 't' }, time()),
+    el('span', { class: 'd' }, isCmd ? '◀' : isState ? '▶' : '·'),
+    el('span', { class: 'msg' },
+      el('span', { class: 'tp' }, topic), '  =  ',
+      el('span', { class: 'p' }, text.length > 160 ? text.slice(0, 160) + '…' : text || '(ว่าง)'),
+      retained ? el('span', { class: 'r' }, '  retained') : null),
+    note?.el,
+  );
+  log.append(row);
+  while (log.childElementCount > 400) log.firstElementChild.remove();
+  const nearBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 80;
+  if (nearBottom) log.scrollTop = log.scrollHeight;
+}
+
+// Returns { el } with a verdict on whether a board will act on this command topic.
+function checkCommand(topic, text) {
+  const verdict = (msg, cls) => ({ el: el('span', { class: `note ${cls}` }, msg) });
+  const known = [...devices.keys()].map(id => `${base}/${id}`);
+
+  if (topic !== topic.trim()) return verdict('✘ topic มีช่องว่างหัว/ท้าย — บอร์ดจะไม่รับ', 'bad');
+  if (topic.startsWith('/')) return verdict(`✘ ขึ้นต้นด้วย "/" เกินมา — ควรเป็น "${topic.slice(1)}"`, 'bad');
+  if (/\/cmd$/i.test(topic)) return null;
+
+  const m = topic.match(/^(.*)\/(relay)\/([^/]*)\/(set)$/i);
+  if (!m) return null;
+  const [, prefix, relayWord, ch, setWord] = m;
+  if (relayWord !== 'relay' || setWord !== 'set') return verdict(`✘ ต้องเป็นตัวพิมพ์เล็ก "…/relay/${ch}/set"`, 'bad');
+
+  if (!known.includes(prefix)) {
+    const ci = known.find(k => k.toLowerCase() === prefix.toLowerCase());
+    if (ci) return verdict(`✘ ตัวพิมพ์เล็ก/ใหญ่ไม่ตรง — ควรเป็น "${ci}/relay/${ch}/set"`, 'bad');
+    if (!known.length) return verdict(`? ยังไม่พบบอร์ดใน "${base}/+/info" — ตรวจ Base topic ด้านบน`, 'wait');
+    return verdict(`✘ ไม่มีบอร์ดที่ใช้ "${prefix}" — บอร์ดที่พบ: ${known.join(', ')}`, 'bad');
+  }
+  const d = devices.get(prefix.slice(base.length + 1));
+  const count = d.info?.relays?.length || 8;
+  if (!/^\d+$/.test(ch) || +ch < 1 || +ch > count) return verdict(`✘ ช่องรีเลย์ "${ch}" ไม่มี — ใช้ 1–${count}`, 'bad');
+  if (!VALID_CMD.test(text.trim())) return verdict(`✘ payload "${text}" ไม่ถูกต้อง — ใช้ ON / OFF / TOGGLE`, 'bad');
+  if (d.status !== 'online') return verdict('✘ topic ถูกต้อง แต่บอร์ดออฟไลน์อยู่', 'bad');
+
+  const k = `${prefix}/relay/${ch}`;
+  // the board's reply can beat the broker's echo of the command back to us
+  const recent = lastState.get(k);
+  if (recent && performance.now() - recent.t < 1500) return verdict(`✔ บอร์ดรับคำสั่งแล้ว → state = ${recent.text}`, 'ok');
+
+  const v = verdict('… topic ถูกต้อง รอบอร์ดตอบ /state', 'wait');
+  clearTimeout(awaiting.get(k)?.timer);
+  awaiting.set(k, {
+    note: v.el,
+    t0: performance.now(),
+    timer: setTimeout(() => {
+      awaiting.delete(k);
+      v.el.textContent = '✘ บอร์ดไม่ตอบใน 3 วินาที — บอร์ดอาจหลุด หรือใช้ firmware เก่า (ดู Serial Console)';
+      v.el.className = 'note bad';
+    }, PENDING_TIMEOUT_MS),
+  });
+  return v;
+}
+
+function resolveAwaiting(topic, text) {
+  const k = topic.replace(/\/state$/, '');
+  lastState.set(k, { text, t: performance.now() });
+  const a = awaiting.get(k);
+  if (!a) return;
+  clearTimeout(a.timer);
+  awaiting.delete(k);
+  a.note.textContent = `✔ บอร์ดรับคำสั่งแล้ว → state = ${text} (${Math.round(performance.now() - a.t0)} ms)`;
+  a.note.className = 'note ok';
 }
 
 function send(id, ch, cmd) {

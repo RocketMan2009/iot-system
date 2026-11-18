@@ -151,6 +151,27 @@ fieldset:disabled { opacity: .55; }
 .legend .relay-ev { color: #f9a8d4; } .legend .tx { color: #7dd3fc; }
 label.check.small { font-size: .82rem; }
 .small-note { font-size: .85rem; margin: 0 0 10px; }
+/* MQTT monitor */
+.monitor { margin-top: 18px; }
+.mon-controls { flex-wrap: wrap; justify-content: flex-end; }
+.mon-controls input.mono { width: 220px; flex: none; }
+.mon-log {
+  background: var(--console-bg); color: var(--console-ink); border-radius: 8px; padding: 8px 10px;
+  max-height: 320px; overflow: auto; font: 12.5px/1.55 "IBM Plex Mono", monospace;
+}
+.mon-row { display: grid; grid-template-columns: 70px 16px minmax(0, 1fr); gap: 0 8px; padding: 2px 0; border-bottom: 1px solid rgba(255,255,255,.05); }
+.mon-row .t { color: #7c8a96; }
+.mon-row .msg { overflow-wrap: anywhere; }
+.mon-row .p { color: #fff; font-weight: 500; }
+.mon-row .r { color: #7c8a96; font-size: 11px; }
+.mon-row.cmd .d, .mon-row.cmd .tp { color: #fcd34d; }
+.mon-row.st .d, .mon-row.st .tp { color: #86efac; }
+.mon-row .note { grid-column: 3; font-size: 12px; }
+.mon-row .note.ok { color: #86efac; }
+.mon-row .note.bad { color: #fca5a5; }
+.mon-row .note.wait { color: #fcd34d; }
+.mqtt-rx-ink { color: #b7791f; } .mqtt-tx-ink { color: var(--on); }
+.warn-ink { color: var(--danger); font-family: "IBM Plex Sans Thai", sans-serif; }
 
 /* pin map table */
 .table-wrap { overflow-x: auto; }

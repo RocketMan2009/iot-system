@@ -146,6 +146,9 @@ function describeLogLine(line) {
     return [`● ผังขา CH${m[1]} → GPIO${m[2]} (${m[3]})`, 'relay-ev'];
   }
   if (line.startsWith('# topics:')) return [line, 'mqtt-rx'];
+  if ((m = line.match(/^# mqtt sub (\S+) (ok|FAILED)$/)))
+    return [`◀ subscribe  ${m[1]}  ${m[2] === 'ok' ? '✔ (บอร์ดรอรับคำสั่งที่ topic นี้)' : '✘ FAILED — ตรวจสิทธิ์ (permission) ของบัญชีบอร์ดใน broker'}`, m[2] === 'ok' ? 'mqtt-rx' : 'err'];
+  if (line.startsWith('# mqtt connected')) return [line, 'mqtt-tx'];
   if (line.startsWith('# bad relay cmd')) return [line, 'err'];
   return [line];
 }
@@ -195,7 +198,8 @@ function showInfo(info) {
     ['Wi-Fi', `${info.wifi}${info.ip ? ` · ${info.ip} · ${info.rssi} dBm` : ''}`],
     ['MQTT', info.mqtt_host ? `${info.mqtt_host}:${info.mqtt_port} · ${info.mqtt ? 'connected' : 'not connected'}` : 'ยังไม่ตั้งค่า'],
   ];
-  $('prov-info').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', {}, k), el('dd', {}, String(v))]));
+  $('prov-info').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', {}, k), el('dd', { 'data-k': k }, String(v))]));
+  checkFirmwareVersion(info);
 
   const f = $('prov-form').elements;
   f.wifi_ssid.value = info.wifi_ssid || '';
@@ -215,6 +219,28 @@ function showInfo(info) {
   $('prov-fields').disabled = false;
 
   renderPinMap(info);
+}
+
+// ---------- outdated firmware warning ----------
+let latestManifest;   // promise, fetched once
+const verNum = v => String(v).split(/[.-]/).slice(0, 3).map(n => parseInt(n, 10) || 0);
+const isOlder = (a, b) => { const x = verNum(a), y = verNum(b); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i]; return false; };
+
+async function checkFirmwareVersion(info) {
+  latestManifest ??= fetch('firmware/manifest.json', { cache: 'no-cache' }).then(r => (r.ok ? r.json() : null)).catch(() => null);
+  const latest = await latestManifest;
+  // relay_pins arrived in 1.0.4 together with the MQTT rx/tx log — its absence means old firmware.
+  const noMqttLog = !info.relay_pins;
+  const behind = latest && !String(info.fw).includes('local') && isOlder(info.fw, latest.version);
+  if (!noMqttLog && !behind) return;
+
+  const msg = noMqttLog
+    ? `เฟิร์มแวร์บนบอร์ด (v${info.fw}) เป็นรุ่นเก่า ยังไม่แสดง log MQTT ที่รับ/ส่ง ใน Serial Console`
+    : `เฟิร์มแวร์บนบอร์ด v${info.fw} — มีรุ่นใหม่ v${latest.version}`;
+  const dd = $('prov-info').querySelector('dd[data-k="Firmware"]');
+  if (dd) dd.replaceChildren(`${info.fw} `, el('span', { class: 'warn-ink' }, `⚠ ${latest ? `มี v${latest.version} — ไปแท็บ “แฟลชเฟิร์มแวร์”` : 'รุ่นเก่า'}`));
+  appendLog($('prov-log'), `! ${msg} → ไปแท็บ “แฟลชเฟิร์มแวร์” แล้วกด “แฟลชเลย” (ค่า Wi-Fi/MQTT ยังอยู่)`, 'err');
+  toast(msg, 8000);
 }
 
 // Firmware default pin map (used when talking to firmware older than 1.0.3, which doesn't report it).

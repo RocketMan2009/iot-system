@@ -59,6 +59,23 @@
       <div id="devices" class="devices">
         <div class="empty">เชื่อมต่อ broker เพื่อค้นหาบอร์ดอัตโนมัติ (จาก topic <code>&lt;base&gt;/+/info</code>)</div>
       </div>
+
+      <div class="card monitor">
+        <div class="card-head">
+          <h2>MQTT Monitor</h2>
+          <form id="mon-form" class="row mon-controls">
+            <input id="mon-filter" class="mono" value="#" aria-label="Subscribe filter" title="topic filter ที่จะดู (# = ทั้งหมด)" />
+            <button class="btn small" type="submit">Subscribe</button>
+            <label class="check small"><input type="checkbox" id="mon-pause" /> หยุด</label>
+            <button class="btn small" type="button" id="mon-clear">ล้าง</button>
+          </form>
+        </div>
+        <p class="muted small-note">
+          แสดงทุกข้อความที่ผ่าน broker (รวมคำสั่งจากแอปภายนอก) และตรวจให้ว่า topic คำสั่ง <code>…/relay/N/set</code> ตรงกับบอร์ดหรือไม่ ·
+          <span class="mqtt-rx-ink">◀ คำสั่ง</span> · <span class="mqtt-tx-ink">▶ จากบอร์ด</span>
+        </p>
+        <div id="mon-log" class="mon-log"><div class="muted">เชื่อมต่อ broker เพื่อเริ่มดูข้อความ</div></div>
+      </div>
     </section>
 
     <!-- ================= PROVISION ================= -->

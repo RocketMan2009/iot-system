@@ -214,7 +214,7 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
   for (unsigned int i = 0; i < len; i++) p += (char)payload[i];
   p.trim();
 
-  Serial.printf("# mqtt rx %s = %s\n", topic, p.c_str());
+  Serial.printf("# mqtt rx %s = %s%s\n", topic, p.c_str(), len == 0 ? "(empty)" : "");
   if (!t.startsWith(topicPrefix)) return;
   String sub = t.substring(topicPrefix.length());   // e.g. "relay/3/set" or "cmd"
 
@@ -266,8 +266,12 @@ static void mqttTask() {
   for (uint8_t i = 0; i < cfg.relayCount; i++) publishRelayState(i);
   publishTelemetry();
   lastTelemetry = millis();
-  mqtt.subscribe((topicPrefix + "relay/+/set").c_str(), 1);
-  mqtt.subscribe((topicPrefix + "cmd").c_str(), 1);
+  // Log exactly what we listen to, so a mismatching external topic is easy to spot.
+  // (Topics are case-sensitive: "ROCKETMAN/..." != "rocketman/...")
+  for (const String& sub : {topicPrefix + "relay/+/set", topicPrefix + "cmd"}) {
+    bool ok = mqtt.subscribe(sub.c_str(), 1);
+    Serial.printf("# mqtt sub %s %s\n", sub.c_str(), ok ? "ok" : "FAILED");
+  }
 }
 
 // ---------- Serial provisioning ----------
