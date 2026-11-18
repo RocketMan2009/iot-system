@@ -39,6 +39,10 @@
 
 ## 2. High-Level Architecture
 
+![สถาปัตยกรรม MQTT](../web/img/architecture.svg)
+
+(ภาพเดียวกันอยู่ในแท็บ “ภาพรวมระบบ” ของเว็บ — ไฟล์ต้นฉบับ `web/img/architecture.svg`)
+
 ```
                          ┌───────────────────────────────────────────┐
                          │        Web App (static HTML/JS)           │

@@ -151,6 +151,13 @@ fieldset:disabled { opacity: .55; }
 .legend .relay-ev { color: #f9a8d4; } .legend .tx { color: #7dd3fc; }
 label.check.small { font-size: .82rem; }
 .small-note { font-size: .85rem; margin: 0 0 10px; }
+/* overview */
+.diagram-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
+.diagram-wrap img { display: block; width: 100%; min-width: 760px; height: auto; }
+.flow li { padding-left: 2px; }
+.c-cmd { color: #c2780a; } .c-st { color: var(--on); } .c-gpio { color: var(--accent); }
+a.btn { text-decoration: none; display: inline-block; }
+
 /* MQTT monitor */
 .monitor { margin-top: 18px; }
 .mon-controls { flex-wrap: wrap; justify-content: flex-end; }

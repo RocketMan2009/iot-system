@@ -1,0 +1,162 @@
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-labelledby="title desc">
+  <title id="title">ESP32 Control Hub — สถาปัตยกรรม MQTT</title>
+  <desc id="desc">Web dashboard and external MQTT apps publish commands to relay/N/set on the MQTT broker; the ESP32 subscribes, drives GPIO to the relay module and publishes relay/N/state, status, info and telemetry back through the broker. USB Web Serial and GitHub Actions/Pages are separate paths that do not use MQTT.</desc>
+  <style>
+    svg { --bg:#ffffff; --ink:#1b1f24; --muted:#65707c; --box:#f6f7f9; --border:#d5dae0; --cmd:#c2780a; --st:#15803d; --accent:#0f766e; --side:#8a94a0; }
+    @media (prefers-color-scheme: dark) {
+      svg { --bg:#0e1116; --ink:#e6edf3; --muted:#8b96a3; --box:#161b22; --border:#2f3742; --cmd:#f5b942; --st:#4ade80; --accent:#2dd4bf; --side:#6b7682; }
+    }
+    text { font-family: "IBM Plex Sans Thai", "Noto Sans Thai", "Leelawadee UI", Tahoma, sans-serif; fill: var(--ink); font-size: 13px; }
+    .mono { font-family: "IBM Plex Mono", Consolas, "Courier New", monospace; font-size: 12px; white-space: pre; }
+    .title { font-size: 22px; font-weight: 600; }
+    .h { font-size: 13px; font-weight: 600; fill: var(--muted); letter-spacing: .3px; }
+    .bt { font-size: 15px; font-weight: 600; }
+    .muted { fill: var(--muted); }
+    .cmd { fill: var(--cmd); }
+    .st { fill: var(--st); }
+    .lbl { font-size: 12px; font-weight: 600; }
+    .bg { fill: var(--bg); }
+    .box { fill: var(--box); stroke: var(--border); stroke-width: 1.2; }
+    .box.hub { stroke: var(--accent); stroke-width: 2; }
+    .box.dash { stroke-dasharray: 5 4; fill: none; }
+    .a-cmd { stroke: var(--cmd); stroke-width: 2.4; fill: none; marker-end: url(#m-cmd); }
+    .a-st { stroke: var(--st); stroke-width: 2.4; fill: none; marker-end: url(#m-st); }
+    .a-gpio { stroke: var(--accent); stroke-width: 2.4; fill: none; marker-end: url(#m-gpio); }
+    .a-side { stroke: var(--side); stroke-width: 1.6; fill: none; stroke-dasharray: 6 4; marker-end: url(#m-side); }
+    .sep { stroke: var(--border); stroke-width: 1; }
+  </style>
+  <defs>
+    <marker id="m-cmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--cmd)"/></marker>
+    <marker id="m-st" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--st)"/></marker>
+    <marker id="m-gpio" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--accent)"/></marker>
+    <marker id="m-side" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--side)"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="780" rx="16"/>
+
+  <!-- header -->
+  <text class="title" x="40" y="50">ESP32 Control Hub — สถาปัตยกรรม MQTT</text>
+  <text class="muted" x="40" y="74">ตัวอย่าง topic ของบอร์ด ROCKET/esp32-0118d8 · ทุกฝั่งคุยผ่าน broker ไม่มีใครเชื่อมตรงถึงกัน</text>
+  <line class="a-cmd" x1="770" y1="45" x2="806" y2="45"/>
+  <text x="816" y="50">คำสั่ง (set / cmd)</text>
+  <line class="a-st" x1="950" y1="45" x2="986" y2="45"/>
+  <text x="996" y="50">สถานะ / ข้อมูลจากบอร์ด</text>
+
+  <text class="h" x="40" y="110">ผู้สั่งงาน (CLIENTS)</text>
+  <text class="h" x="440" y="110">ตัวกลาง (BROKER)</text>
+  <text class="h" x="900" y="110">อุปกรณ์ (DEVICE)</text>
+
+  <!-- clients -->
+  <rect class="box" x="40" y="124" width="240" height="130" rx="10"/>
+  <text class="bt" x="56" y="152">Web Dashboard</text>
+  <text x="56" y="176">หน้าเว็บบน GitHub Pages</text>
+  <text x="56" y="196">mqtt.js ในเบราว์เซอร์ (คอม / มือถือ)</text>
+  <text class="mono muted" x="56" y="222">wss://&lt;cluster&gt;:8884/mqtt</text>
+  <text class="muted" x="56" y="242">มี MQTT Monitor ตรวจ topic</text>
+
+  <rect class="box" x="40" y="274" width="240" height="120" rx="10"/>
+  <text class="bt" x="56" y="302">แอป MQTT ภายนอก</text>
+  <text x="56" y="326">MQTTX · Node-RED</text>
+  <text x="56" y="346">IoT MQTT Panel (มือถือ)</text>
+  <text class="mono muted" x="56" y="374">mqtts://&lt;cluster&gt;:8883</text>
+
+  <rect class="box dash" x="40" y="414" width="240" height="86" rx="10"/>
+  <text class="bt muted" x="56" y="442">ระบบอื่นในอนาคต</text>
+  <text class="muted" x="56" y="466">Home Assistant · Grafana</text>
+  <text class="muted" x="56" y="486">subscribe topic เดิมได้ทันที</text>
+
+  <!-- broker -->
+  <rect class="box hub" x="440" y="124" width="320" height="210" rx="12"/>
+  <text class="bt" x="458" y="152">MQTT Broker</text>
+  <text class="muted" x="458" y="174">HiveMQ Cloud (หรือ Mosquitto ใน LAN)</text>
+  <text x="458" y="204">• TLS 8883 ← ESP32 / แอปภายนอก</text>
+  <text x="458" y="226">• WSS 8884 ← เว็บเบราว์เซอร์</text>
+  <text x="458" y="248">• ล็อกอิน username / password</text>
+  <text x="458" y="270">• Retained = จำสถานะล่าสุดให้ทุก client</text>
+  <text x="458" y="292">• LWT: บอร์ดหลุด → status = offline</text>
+  <text x="458" y="314">• ส่งต่อข้อความตาม topic (pub/sub)</text>
+
+  <line class="sep" x1="600" y1="334" x2="600" y2="354" stroke-dasharray="3 3"/>
+
+  <!-- topic tree -->
+  <rect class="box" x="440" y="354" width="320" height="230" rx="12"/>
+  <text class="bt" x="458" y="382">Topic ของบอร์ด 1 ตัว</text>
+  <text class="mono" x="458" y="410">ROCKET/esp32-0118d8/</text>
+  <text class="mono cmd" x="458" y="434">├ relay/N/set    ◀ ON|OFF|TOGGLE</text>
+  <text class="mono st" x="458" y="456">├ relay/N/state  ▶ ON|OFF   (R)</text>
+  <text class="mono st" x="458" y="478">├ status         ▶ online|offline (R)</text>
+  <text class="mono st" x="458" y="500">├ info           ▶ JSON ผังขา  (R)</text>
+  <text class="mono st" x="458" y="522">├ telemetry      ▶ RSSI, uptime</text>
+  <text class="mono cmd" x="458" y="544">└ cmd            ◀ reboot|ping|all_off</text>
+  <text class="muted" x="458" y="570" style="font-size:12px">(R) = retained · N = 1–8 · ◀ เข้าบอร์ด ▶ ออกจากบอร์ด</text>
+
+  <!-- device -->
+  <rect class="box hub" x="900" y="124" width="260" height="200" rx="12"/>
+  <text class="bt" x="916" y="152">ESP32-DevKitC</text>
+  <text class="muted" x="916" y="174">WROOM-32D · เฟิร์มแวร์ v1.0.x</text>
+  <text class="mono cmd" x="916" y="204">SUB relay/+/set , cmd</text>
+  <text class="mono st" x="916" y="226">PUB state, status,</text>
+  <text class="mono st" x="916" y="246">    info, telemetry</text>
+  <text x="916" y="274">NVS: Wi-Fi/MQTT + สถานะรีเลย์</text>
+  <text x="916" y="298">Watchdog · reconnect อัตโนมัติ</text>
+
+  <rect class="box" x="900" y="354" width="260" height="230" rx="12"/>
+  <text class="bt" x="916" y="382">โมดูลรีเลย์ 8 ช่อง</text>
+  <text class="mono" x="916" y="410">CH1 · GPIO16</text>
+  <text class="mono" x="916" y="432">CH2 · GPIO17</text>
+  <text class="mono" x="916" y="454">CH3 · GPIO18</text>
+  <text class="mono" x="916" y="476">CH4 · GPIO19</text>
+  <text class="mono" x="1040" y="410">CH5 · GPIO23</text>
+  <text class="mono" x="1040" y="432">CH6 · GPIO25</text>
+  <text class="mono" x="1040" y="454">CH7 · GPIO26</text>
+  <text class="mono" x="1040" y="476">CH8 · GPIO27</text>
+  <text x="916" y="508">GPIO → IN1…IN8 (active-LOW)</text>
+  <text class="muted" x="916" y="532">GND ร่วม · ไฟเลี้ยงโมดูล 5V</text>
+  <text class="muted" x="916" y="560">↓ โหลด: หลอดไฟ · ปั๊ม · พัดลม</text>
+
+  <!-- MQTT arrows: clients <-> broker -->
+  <line class="a-cmd" x1="282" y1="170" x2="434" y2="170"/>
+  <text class="lbl cmd" x="358" y="162" text-anchor="middle">① PUB …/set</text>
+  <line class="a-st" x1="436" y1="206" x2="286" y2="206"/>
+  <text class="lbl st" x="361" y="224" text-anchor="middle">⑤ …/state</text>
+
+  <line class="a-cmd" x1="282" y1="300" x2="434" y2="300"/>
+  <text class="lbl cmd" x="358" y="292" text-anchor="middle">① PUB …/set</text>
+  <line class="a-st" x1="436" y1="330" x2="286" y2="330"/>
+  <text class="lbl st" x="361" y="348" text-anchor="middle">⑤ …/state</text>
+
+  <!-- broker <-> device -->
+  <line class="a-cmd" x1="762" y1="196" x2="894" y2="196"/>
+  <text class="lbl cmd" x="828" y="188" text-anchor="middle">② ส่งต่อ set</text>
+  <line class="a-st" x1="896" y1="236" x2="766" y2="236"/>
+  <text class="lbl st" x="831" y="254" text-anchor="middle">④ PUB state</text>
+
+  <!-- device -> relays -->
+  <line class="a-gpio" x1="1030" y1="326" x2="1030" y2="350"/>
+  <text class="lbl" x="1042" y="344" style="fill:var(--accent)">③ GPIO</text>
+
+  <!-- side paths (not MQTT) -->
+  <line class="sep" x1="40" y1="610" x2="1160" y2="610"/>
+  <text class="h" x="40" y="636">เส้นทางที่ไม่ผ่าน MQTT</text>
+
+  <rect class="box" x="40" y="650" width="240" height="44" rx="8"/>
+  <text x="56" y="677">เบราว์เซอร์ · แท็บ USB / แฟลช</text>
+  <line class="a-side" x1="282" y1="672" x2="434" y2="672"/>
+  <text class="muted" x="358" y="664" text-anchor="middle" style="font-size:12px">สาย USB · Web Serial</text>
+  <rect class="box" x="440" y="650" width="320" height="44" rx="8"/>
+  <text x="456" y="677">ตั้งค่า Wi-Fi/MQTT · ทดสอบรีเลย์ · แฟลช</text>
+  <line class="a-side" x1="762" y1="672" x2="894" y2="672"/>
+  <rect class="box" x="900" y="650" width="260" height="44" rx="8"/>
+  <text x="916" y="677">ESP32 (COM3 · CP210x)</text>
+
+  <rect class="box" x="40" y="712" width="240" height="44" rx="8"/>
+  <text x="56" y="739">แก้โค้ดใน GitHub (main.cpp)</text>
+  <line class="a-side" x1="282" y1="734" x2="434" y2="734"/>
+  <text class="muted" x="358" y="726" text-anchor="middle" style="font-size:12px">push</text>
+  <rect class="box" x="440" y="712" width="320" height="44" rx="8"/>
+  <text x="456" y="739">GitHub Actions build เฟิร์มแวร์ (PlatformIO)</text>
+  <line class="a-side" x1="762" y1="734" x2="894" y2="734"/>
+  <text class="muted" x="828" y="726" text-anchor="middle" style="font-size:12px">deploy</text>
+  <rect class="box" x="900" y="712" width="260" height="44" rx="8"/>
+  <text x="916" y="739">GitHub Pages: เว็บ + merged.bin</text>
+</svg>

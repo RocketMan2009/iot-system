@@ -5,6 +5,8 @@
 
 รายละเอียดการออกแบบ: [docs/DESIGN.md](docs/DESIGN.md)
 
+![สถาปัตยกรรม MQTT ของ ESP32 Control Hub](web/img/architecture.svg)
+
 > **ไม่อยากติดตั้งอะไรบนเครื่อง?** นำขึ้น GitHub Pages + HiveMQ Cloud ให้ทุกคนใช้ผ่าน URL เดียว: [docs/DEPLOY.md](docs/DEPLOY.md)
 > (GitHub Actions จะ build เฟิร์มแวร์ให้ และหน้าเว็บมีปุ่ม “แฟลชเลย (1 คลิก)”)
 >

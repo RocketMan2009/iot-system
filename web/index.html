@@ -22,6 +22,7 @@
       <button class="tab active" data-tab="dashboard" role="tab">แดชบอร์ด</button>
       <button class="tab" data-tab="provision" role="tab">ตั้งค่าบอร์ด (USB)</button>
       <button class="tab" data-tab="flash" role="tab">แฟลชเฟิร์มแวร์</button>
+      <button class="tab" data-tab="overview" role="tab">ภาพรวมระบบ</button>
     </nav>
   </header>
 
@@ -240,6 +241,40 @@
           <button id="flash-clear" class="btn small">ล้าง</button>
         </div>
         <pre id="flash-log" class="console"></pre>
+      </div>
+    </section>
+    <!-- ================= OVERVIEW ================= -->
+    <section id="tab-overview" class="panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>สถาปัตยกรรม MQTT</h2>
+          <a class="btn small" href="img/architecture.svg" target="_blank" rel="noopener">เปิดภาพเต็ม</a>
+        </div>
+        <div class="diagram-wrap">
+          <img src="img/architecture.svg" alt="แผนภาพสถาปัตยกรรม MQTT: Web Dashboard และแอปภายนอก publish คำสั่งไปที่ relay/N/set บน broker, ESP32 subscribe แล้วสั่ง GPIO ไปที่โมดูลรีเลย์ และ publish relay/N/state กลับผ่าน broker" width="1200" height="780" />
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <div class="card-head"><h2>ลำดับการสั่งงาน 1 ครั้ง</h2></div>
+          <ol class="steps flow">
+            <li><b class="c-cmd">① PUB</b> เว็บหรือแอปภายนอกส่ง <code>ON</code> ไปที่ <code>&lt;base&gt;/&lt;id&gt;/relay/N/set</code></li>
+            <li><b class="c-cmd">② ส่งต่อ</b> broker ส่งต่อให้ ESP32 ที่ subscribe <code>relay/+/set</code> ไว้</li>
+            <li><b class="c-gpio">③ GPIO</b> ESP32 สั่งขา GPIO ของช่องนั้น → รีเลย์ทำงาน และจำสถานะลง NVS</li>
+            <li><b class="c-st">④ PUB state</b> ESP32 ยืนยันสถานะจริงไปที่ <code>relay/N/state</code> (retained)</li>
+            <li><b class="c-st">⑤ อัปเดต</b> ทุก client ที่ subscribe อยู่เห็นสถานะใหม่พร้อมกัน</li>
+          </ol>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>ทำไมออกแบบแบบนี้</h2></div>
+          <ul class="steps">
+            <li><b>แยก set / state</b> — สถานะบนจอมาจากบอร์ดจริงเสมอ และคำสั่งเก่าไม่ถูกสั่งซ้ำตอน reconnect</li>
+            <li><b>Retained + LWT</b> — เปิดเว็บเมื่อไหร่ก็เห็นสถานะล่าสุดทันที และรู้ว่าบอร์ดไหนออฟไลน์</li>
+            <li><b>ไม่มี server ของตัวเอง</b> — เว็บเป็นไฟล์ static บน GitHub Pages, broker คือแหล่งข้อมูลเดียว</li>
+            <li><b>TLS ทุกเส้น</b> — บอร์ดใช้ 8883, เว็บใช้ WSS 8884, ต้องมี username/password</li>
+          </ul>
+        </div>
       </div>
     </section>
   </main>
