@@ -1,0 +1,5 @@
+firmware/.pio/
+firmware/.vscode/
+broker/passwd
+_site/
+.claude/settings.local.json

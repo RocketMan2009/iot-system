@@ -1,0 +1,81 @@
+# Builds the ESP32 firmware in the cloud and publishes the web app (with the firmware
+# bundled for one-click flashing) to GitHub Pages. Nothing has to be installed locally.
+name: Build firmware & deploy web
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      FW_VERSION: 1.0.${{ github.run_number }}
+      PLATFORMIO_BUILD_FLAGS: -DFW_VERSION=\"1.0.${{ github.run_number }}\"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+
+      - name: Install PlatformIO
+        run: pip install platformio==6.1.16
+
+      - name: Build firmware
+        working-directory: firmware
+        run: pio run
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site/firmware
+          cp -r web/. _site/
+          cp firmware/.pio/build/esp32dev/merged.bin _site/firmware/esp32dev-merged.bin
+          python - <<'EOF'
+          import datetime, hashlib, json, os
+          path = "_site/firmware/esp32dev-merged.bin"
+          data = open(path, "rb").read()
+          manifest = {
+              "version": os.environ["FW_VERSION"],
+              "chip": "ESP32",
+              "board": "esp32dev",
+              "file": "esp32dev-merged.bin",
+              "address": 0,
+              "size": len(data),
+              "sha256": hashlib.sha256(data).hexdigest(),
+              "built": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+              "commit": os.environ["GITHUB_SHA"][:7],
+          }
+          json.dump(manifest, open("_site/firmware/manifest.json", "w"), indent=2)
+          print(manifest)
+          EOF
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

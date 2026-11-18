@@ -1,0 +1,16 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0.20
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT (ESP32)
+      - "9001:9001"   # MQTT over WebSocket (web app)
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./acl:/mosquitto/config/acl:ro
+      - ./passwd:/mosquitto/config/passwd
+      - mosquitto-data:/mosquitto/data
+
+volumes:
+  mosquitto-data:

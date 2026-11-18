@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ESP32 Control Hub</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script src="https://unpkg.com/mqtt@5.10.1/dist/mqtt.min.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">⚡</span>
+      <div>
+        <h1>ESP32 Control Hub</h1>
+        <p class="sub">MQTT · Web Serial · Browser Flasher</p>
+      </div>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="dashboard" role="tab">แดชบอร์ด</button>
+      <button class="tab" data-tab="provision" role="tab">ตั้งค่าบอร์ด (USB)</button>
+      <button class="tab" data-tab="flash" role="tab">แฟลชเฟิร์มแวร์</button>
+    </nav>
+  </header>
+
+  <div id="serial-warning" class="banner warn" hidden>
+    เบราว์เซอร์นี้ไม่รองรับ <b>Web Serial API</b> — ใช้ Chrome หรือ Edge บนคอมพิวเตอร์ และเปิดผ่าน <code>https://</code> หรือ <code>http://localhost</code> เพื่อใช้แท็บตั้งค่าบอร์ดและแฟลช
+  </div>
+
+  <main>
+    <!-- ================= DASHBOARD ================= -->
+    <section id="tab-dashboard" class="panel active">
+      <div class="card broker">
+        <div class="card-head">
+          <h2>MQTT Broker</h2>
+          <span id="mqtt-status" class="pill off">Disconnected</span>
+        </div>
+        <form id="mqtt-form" class="grid-form" autocomplete="off">
+          <label class="span2">WebSocket URL
+            <input name="url" placeholder="ws://192.168.1.10:9001" required />
+          </label>
+          <label>Username <input name="username" /></label>
+          <label>Password <input name="password" type="password" /></label>
+          <label>Base topic <input name="base" value="home" required /></label>
+          <label class="check"><input type="checkbox" name="remember" /> จำรหัสผ่านในเบราว์เซอร์นี้</label>
+          <div class="actions span2">
+            <button type="submit" id="mqtt-connect" class="btn primary">เชื่อมต่อ</button>
+            <button type="button" id="mqtt-disconnect" class="btn" disabled>ตัดการเชื่อมต่อ</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="section-head">
+        <h2>อุปกรณ์</h2>
+        <span id="device-count" class="muted">0 บอร์ด</span>
+      </div>
+      <div id="devices" class="devices">
+        <div class="empty">เชื่อมต่อ broker เพื่อค้นหาบอร์ดอัตโนมัติ (จาก topic <code>&lt;base&gt;/+/info</code>)</div>
+      </div>
+    </section>
+
+    <!-- ================= PROVISION ================= -->
+    <section id="tab-provision" class="panel">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-head">
+            <h2>เชื่อมต่อบอร์ดผ่าน USB</h2>
+            <span id="prov-status" class="pill off">Not connected</span>
+          </div>
+          <p class="muted">เสียบ ESP32-DevKitC แล้วกด “เลือกพอร์ต” (ต้องติดตั้งไดรเวอร์ CP210x / CH340)</p>
+          <div class="actions">
+            <button id="prov-connect" class="btn primary">เลือกพอร์ต</button>
+            <button id="prov-disconnect" class="btn" disabled>ปิดพอร์ต</button>
+            <button id="prov-reset" class="btn" disabled title="Pulse EN ผ่าน RTS">รีเซ็ตบอร์ด</button>
+          </div>
+          <dl id="prov-info" class="info-grid"></dl>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>ค่าการตั้งค่า</h2></div>
+          <form id="prov-form" class="grid-form" autocomplete="off">
+            <fieldset disabled id="prov-fields" class="span2 grid-form inner">
+              <label class="span2">Wi-Fi SSID
+                <div class="row">
+                  <input name="wifi_ssid" list="ssid-list" required />
+                  <datalist id="ssid-list"></datalist>
+                  <button type="button" id="prov-scan" class="btn small">สแกน</button>
+                </div>
+              </label>
+              <label class="span2">Wi-Fi Password <input name="wifi_pass" type="password" placeholder="(เว้นว่าง = ใช้ค่าเดิม)" /></label>
+              <label>MQTT Host (IP/hostname) <input name="mqtt_host" placeholder="xxxx.s1.eu.hivemq.cloud" /></label>
+              <label>MQTT Port (TCP) <input name="mqtt_port" type="number" value="1883" min="1" max="65535" /></label>
+              <label>MQTT Username <input name="mqtt_user" /></label>
+              <label>MQTT Password <input name="mqtt_pass" type="password" placeholder="(เว้นว่าง = ใช้ค่าเดิม)" /></label>
+              <label>Device ID <input name="device_id" pattern="[A-Za-z0-9_\-]{1,32}" /></label>
+              <label>Base topic <input name="base" value="home" pattern="[A-Za-z0-9_\-/]{1,32}" /></label>
+              <label>จำนวนรีเลย์ <input name="relay_count" type="number" min="1" max="8" value="8" /></label>
+              <div class="checks">
+                <label class="check"><input type="checkbox" name="mqtt_tls" /> ใช้ TLS (MQTTS — Cloud broker port 8883)</label>
+                <label class="check"><input type="checkbox" name="active_low" checked /> รีเลย์ Active-LOW</label>
+                <label class="check"><input type="checkbox" name="restore_state" checked /> คืนสถานะหลังไฟดับ</label>
+              </div>
+              <div class="actions span2">
+                <button type="submit" class="btn primary">บันทึกลงบอร์ด &amp; รีบูต</button>
+                <button type="button" id="prov-factory" class="btn danger">Factory reset</button>
+              </div>
+            </fieldset>
+          </form>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>ทดสอบรีเลย์ผ่าน USB</h2>
+          <span class="muted">ใช้ตรวจสายก่อนติดตั้ง — ไม่ต้องมี Wi-Fi</span>
+        </div>
+        <div id="prov-relays" class="relay-test"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Serial Console</h2>
+          <button id="prov-clear" class="btn small">ล้าง</button>
+        </div>
+        <pre id="prov-log" class="console"></pre>
+        <form id="prov-send" class="row">
+          <input name="line" placeholder='{"cmd":"info"}' class="mono" />
+          <button class="btn small" type="submit">ส่ง</button>
+        </form>
+      </div>
+    </section>
+
+    <!-- ================= FLASH ================= -->
+    <section id="tab-flash" class="panel">
+      <div class="two-col">
+        <div class="card">
+          <div class="card-head">
+            <h2>ไฟล์เฟิร์มแวร์</h2>
+            <span id="flash-status" class="pill off">Idle</span>
+          </div>
+          <div id="fw-latest" class="latest" hidden>
+            <div>
+              <b>เฟิร์มแวร์ล่าสุด <span id="fw-version" class="mono"></span></b>
+              <span id="fw-meta" class="muted"></span>
+            </div>
+            <button id="fw-flash-latest" class="btn primary">แฟลชเลย (1 คลิก)</button>
+          </div>
+          <p class="muted or">หรือเลือกไฟล์ .bin เอง:</p>
+          <div class="seg">
+            <label><input type="radio" name="flash-mode" value="merged" checked /> ไฟล์เดียว (merged.bin @ 0x0)</label>
+            <label><input type="radio" name="flash-mode" value="split" /> แยกไฟล์ (bootloader / partitions / app)</label>
+          </div>
+
+          <div id="flash-merged" class="files">
+            <div class="file-row">
+              <span class="addr mono">0x0</span>
+              <input type="file" accept=".bin" data-addr="0x0" />
+            </div>
+          </div>
+          <div id="flash-split" class="files" hidden>
+            <div class="file-row"><span class="addr mono">0x1000</span><input type="file" accept=".bin" data-addr="0x1000" /><span class="muted">bootloader.bin</span></div>
+            <div class="file-row"><span class="addr mono">0x8000</span><input type="file" accept=".bin" data-addr="0x8000" /><span class="muted">partitions.bin</span></div>
+            <div class="file-row"><span class="addr mono">0xE000</span><input type="file" accept=".bin" data-addr="0xE000" /><span class="muted">boot_app0.bin</span></div>
+            <div class="file-row"><span class="addr mono">0x10000</span><input type="file" accept=".bin" data-addr="0x10000" /><span class="muted">firmware.bin</span></div>
+          </div>
+
+          <div class="grid-form">
+            <label>Baud rate
+              <select id="flash-baud">
+                <option>115200</option><option>230400</option><option>460800</option><option selected>921600</option>
+              </select>
+            </label>
+            <label class="check"><input type="checkbox" id="flash-erase" /> ลบแฟลชทั้งหมดก่อน (ล้าง config ด้วย)</label>
+          </div>
+
+          <div class="actions">
+            <button id="flash-start" class="btn primary">เชื่อมต่อ &amp; แฟลช</button>
+            <button id="flash-erase-only" class="btn">ลบแฟลชอย่างเดียว</button>
+          </div>
+          <div class="progress"><div id="flash-bar" class="bar"></div></div>
+          <p id="flash-progress-text" class="muted mono"></p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>วิธีใช้</h2></div>
+          <ol class="steps">
+            <li>เสียบ ESP32 ผ่าน USB (Windows: ติดตั้งไดรเวอร์ CP210x หรือ CH340 ครั้งแรก)</li>
+            <li>กด <b>“แฟลชเลย”</b> เพื่อใช้เฟิร์มแวร์ล่าสุดที่ build ไว้บนเว็บนี้ — หรือเลือกไฟล์ <code>.bin</code> ที่ build เอง</li>
+            <li>ปิดโปรแกรม/แท็บอื่นที่ใช้พอร์ตอยู่ (Serial Monitor, แท็บ “ตั้งค่าบอร์ด”) แล้วเลือกพอร์ต COM ของบอร์ด</li>
+            <li>DevKitC เข้าบูตโหลดเดอร์เองผ่าน DTR/RTS — ถ้าไม่สำเร็จ ให้กดปุ่ม <b>BOOT</b> ค้างไว้ระหว่างเริ่มเชื่อมต่อ</li>
+            <li>เสร็จแล้วไปแท็บ “ตั้งค่าบอร์ด” เพื่อใส่ Wi-Fi และ MQTT</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Flasher Log</h2>
+          <button id="flash-clear" class="btn small">ล้าง</button>
+        </div>
+        <pre id="flash-log" class="console"></pre>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

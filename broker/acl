@@ -1,0 +1,7 @@
+# Web/admin user: full access under home/
+user webadmin
+topic readwrite home/#
+
+# Boards: one MQTT user per board is best. %u = username, so name each board's
+# MQTT user the same as its Device ID (e.g. esp32-a1b2c3) and it can only touch its own topics.
+pattern readwrite home/%u/#
