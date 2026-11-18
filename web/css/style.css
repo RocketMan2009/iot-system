@@ -134,14 +134,37 @@ fieldset:disabled { opacity: .55; }
 .info-grid { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 14px 0 0; font-size: .87rem; }
 .info-grid dt { color: var(--muted); }
 .info-grid dd { margin: 0; font-family: "IBM Plex Mono", monospace; overflow-wrap: anywhere; }
-.relay-test { display: flex; flex-wrap: wrap; gap: 8px; }
-.relay-test .relay { min-width: 130px; }
 
 .console {
   background: var(--console-bg); color: var(--console-ink); border-radius: 8px; padding: 12px;
   height: 240px; overflow: auto; margin: 0 0 10px; font: 12.5px/1.5 "IBM Plex Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .console .tx { color: #7dd3fc; }
+.console .mqtt-rx { color: #fcd34d; }
+.console .mqtt-tx { color: #86efac; }
+.console .relay-ev { color: #f9a8d4; font-weight: 500; }
+.console.only-mqtt > span:not(.mqtt-rx):not(.mqtt-tx):not(.relay-ev) { display: none; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: -4px 0 8px; font: 12px "IBM Plex Mono", monospace; }
+.legend span { padding: 2px 8px; border-radius: 6px; background: var(--console-bg); }
+.legend .mqtt-rx { color: #fcd34d; } .legend .mqtt-tx { color: #86efac; }
+.legend .relay-ev { color: #f9a8d4; } .legend .tx { color: #7dd3fc; }
+label.check.small { font-size: .82rem; }
+.small-note { font-size: .85rem; margin: 0 0 10px; }
+
+/* pin map table */
+.table-wrap { overflow-x: auto; }
+.pinmap { width: 100%; border-collapse: collapse; font-size: .87rem; }
+.pinmap th, .pinmap td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.pinmap th { color: var(--muted); font-weight: 500; font-size: .8rem; }
+.pinmap td.gpio { font-family: "IBM Plex Mono", monospace; font-weight: 600; color: var(--accent); }
+.pinmap td.topic { font-family: "IBM Plex Mono", monospace; font-size: .8rem; }
+.pinmap .state-on { color: var(--on); font-weight: 600; }
+.pinmap .state-off { color: var(--muted); }
+.pinmap tr.flash td { animation: rowflash .8s; }
+@keyframes rowflash { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } }
+.copy { border: 0; background: none; color: var(--muted); cursor: pointer; padding: 0 4px; font: inherit; }
+.copy:hover { color: var(--accent); }
 .console .rx-json { color: #a7f3d0; }
 .console .err { color: #fca5a5; }
 

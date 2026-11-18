@@ -113,17 +113,39 @@
 
       <div class="card">
         <div class="card-head">
-          <h2>ทดสอบรีเลย์ผ่าน USB</h2>
-          <span class="muted">ใช้ตรวจสายก่อนติดตั้ง — ไม่ต้องมี Wi-Fi</span>
+          <h2>ผังต่อสายรีเลย์ &amp; ทดสอบ ON / OFF</h2>
+          <span class="muted">ทดสอบผ่าน USB ได้โดยไม่ต้องมี Wi-Fi</span>
         </div>
-        <div id="prov-relays" class="relay-test"></div>
+        <p class="muted small-note">
+          ต่อขา <b>GPIO</b> ของ ESP32 เข้าขา <b>IN</b> ของโมดูลรีเลย์ช่องเดียวกัน (CH1 → IN1 …) ·
+          <b>GND</b> ของ ESP32 ต่อร่วมกับ GND ของโมดูล · ไฟเลี้ยงโมดูล 5V ต่อจากขา <b>5V</b> ของบอร์ดหรือแหล่งจ่ายแยก
+        </p>
+        <div class="table-wrap">
+          <table class="pinmap">
+            <thead>
+              <tr><th>ช่อง</th><th>ESP32 pin</th><th>ตำแหน่งบน DevKitC</th><th>ต่อเข้า</th><th>MQTT topic (สั่งงาน)</th><th>สถานะ</th><th>ทดสอบ</th></tr>
+            </thead>
+            <tbody id="prov-relays">
+              <tr><td colspan="7" class="muted">เชื่อมต่อบอร์ดผ่าน USB เพื่อดูผังขาและทดสอบรีเลย์</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div class="card">
         <div class="card-head">
           <h2>Serial Console</h2>
-          <button id="prov-clear" class="btn small">ล้าง</button>
+          <div class="row">
+            <label class="check small"><input type="checkbox" id="prov-filter-mqtt" /> เฉพาะ MQTT / รีเลย์</label>
+            <button id="prov-clear" class="btn small">ล้าง</button>
+          </div>
         </div>
+        <p class="legend">
+          <span class="mqtt-rx">◀ รับ topic (คำสั่งเข้า)</span>
+          <span class="relay-ev">● รีเลย์ทำงาน (CH → GPIO)</span>
+          <span class="mqtt-tx">▶ ส่ง topic (สถานะออก)</span>
+          <span class="tx">&gt; คำสั่ง USB</span>
+        </p>
         <pre id="prov-log" class="console"></pre>
         <form id="prov-send" class="row">
           <input name="line" placeholder='{"cmd":"info"}' class="mono" />

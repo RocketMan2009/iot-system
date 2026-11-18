@@ -98,7 +98,9 @@ static void writeRelayPin(uint8_t idx) {
 static void publishRelayState(uint8_t idx) {
   if (!mqtt.connected()) return;
   String t = topicPrefix + "relay/" + String(idx + 1) + "/state";
-  mqtt.publish(t.c_str(), relayOn(idx) ? "ON" : "OFF", true);
+  const char* v = relayOn(idx) ? "ON" : "OFF";
+  mqtt.publish(t.c_str(), v, true);
+  Serial.printf("# mqtt tx %s = %s\n", t.c_str(), v);
 }
 
 static void saveRelayMask() {
@@ -108,7 +110,8 @@ static void saveRelayMask() {
 }
 
 // cmd: "ON" | "OFF" | "TOGGLE" (case-insensitive). Returns false on bad input.
-static bool setRelay(uint8_t idx, String cmd) {
+// source: who asked ("mqtt", "usb", "cmd") — only used for the serial log.
+static bool setRelay(uint8_t idx, String cmd, const char* source = "mqtt") {
   if (idx >= cfg.relayCount) return false;
   cmd.toUpperCase();
   bool target;
@@ -121,8 +124,11 @@ static bool setRelay(uint8_t idx, String cmd) {
   else relayMask &= ~(1u << idx);
   writeRelayPin(idx);
   saveRelayMask();
+  // e.g. "# relay CH3 GPIO18 -> ON (pin LOW, active-low) [mqtt]"
+  Serial.printf("# relay CH%u GPIO%u -> %s (pin %s, active-%s) [%s]\n", idx + 1, RELAY_PINS[idx],
+                target ? "ON" : "OFF", digitalRead(RELAY_PINS[idx]) ? "HIGH" : "LOW",
+                cfg.activeLow ? "low" : "high", source);
   publishRelayState(idx);   // always echo, even if unchanged (confirms command to UI)
-  Serial.printf("# relay %u -> %s\n", idx + 1, target ? "ON" : "OFF");
   return true;
 }
 
@@ -208,16 +214,18 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
   for (unsigned int i = 0; i < len; i++) p += (char)payload[i];
   p.trim();
 
+  Serial.printf("# mqtt rx %s = %s\n", topic, p.c_str());
   if (!t.startsWith(topicPrefix)) return;
   String sub = t.substring(topicPrefix.length());   // e.g. "relay/3/set" or "cmd"
 
   if (sub.startsWith("relay/") && sub.endsWith("/set")) {
     int ch = sub.substring(6, sub.length() - 4).toInt();   // 1-based
-    if (ch < 1 || !setRelay(ch - 1, p)) Serial.printf("# bad relay cmd: %s = %s\n", topic, p.c_str());
+    if (ch < 1 || !setRelay(ch - 1, p, "mqtt"))
+      Serial.printf("# bad relay cmd: %s = %s (valid: CH1-%u, ON/OFF/TOGGLE)\n", topic, p.c_str(), cfg.relayCount);
   } else if (sub == "cmd") {
     if (p == "reboot") { mqtt.publish((topicPrefix + "status").c_str(), "offline", true); delay(100); ESP.restart(); }
     else if (p == "ping") { publishInfo(); publishTelemetry(); }
-    else if (p == "all_off") { for (uint8_t i = 0; i < cfg.relayCount; i++) setRelay(i, "OFF"); }
+    else if (p == "all_off") { for (uint8_t i = 0; i < cfg.relayCount; i++) setRelay(i, "OFF", "cmd"); }
   }
 }
 
@@ -318,6 +326,9 @@ static void handleCommand(const char* line) {
     i["rssi"] = WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0;
     i["mqtt"] = mqtt.connected();
     i["relay_mask"] = relayMask;
+    i["topic_prefix"] = topicPrefix;
+    JsonArray pins = i["relay_pins"].to<JsonArray>();
+    for (uint8_t k = 0; k < cfg.relayCount; k++) pins.add(RELAY_PINS[k]);
     reply(d);
 
   } else if (cmd == "scan") {
@@ -365,7 +376,7 @@ static void handleCommand(const char* line) {
   } else if (cmd == "relay") {
     int ch = req["ch"] | 0;
     String st = req["state"] | "TOGGLE";
-    if (ch < 1 || !setRelay(ch - 1, st)) { replyError("relay", "bad ch/state"); return; }
+    if (ch < 1 || !setRelay(ch - 1, st, "usb")) { replyError("relay", "bad ch/state"); return; }
     JsonDocument d;
     d["ok"] = true;
     d["type"] = "relay";
@@ -445,6 +456,9 @@ void setup() {
   esp_task_wdt_add(NULL);
 
   Serial.printf("\n# ESP32 relay controller fw=%s id=%s\n", FW_VERSION, cfg.deviceId.c_str());
+  Serial.printf("# topics: %srelay/<1-%u>/set  (payload ON / OFF / TOGGLE)\n", topicPrefix.c_str(), cfg.relayCount);
+  for (uint8_t i = 0; i < cfg.relayCount; i++)
+    Serial.printf("# pinmap CH%u -> GPIO%u (%s)\n", i + 1, RELAY_PINS[i], relayOn(i) ? "ON" : "OFF");
   if (cfg.wifiSsid.isEmpty())
     Serial.println("# not provisioned: open the web app > Provision tab and connect over USB");
 }

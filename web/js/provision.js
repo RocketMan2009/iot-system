@@ -21,6 +21,7 @@ export function initProvision() {
   $('prov-scan').addEventListener('click', scan);
   $('prov-factory').addEventListener('click', factoryReset);
   $('prov-clear').addEventListener('click', () => $('prov-log').replaceChildren());
+  $('prov-filter-mqtt').addEventListener('change', e => $('prov-log').classList.toggle('only-mqtt', e.target.checked));
   $('prov-form').addEventListener('submit', e => { e.preventDefault(); saveConfig(); });
   // 8883 = MQTTS by convention: tick TLS automatically, 1883 = plain
   const pf = $('prov-form').elements;
@@ -81,7 +82,8 @@ function cleanup(msg) {
   $('prov-disconnect').disabled = true;
   $('prov-reset').disabled = true;
   $('prov-fields').disabled = true;
-  $('prov-relays').replaceChildren();
+  $('prov-relays').replaceChildren(el('tr', {},
+    el('td', { colspan: 7, class: 'muted' }, 'เชื่อมต่อบอร์ดผ่าน USB เพื่อดูผังขาและทดสอบรีเลย์')));
   if (msg) toast(msg);
 }
 
@@ -123,8 +125,29 @@ function onLine(line) {
       waiters.clear();
     }
   } else if (line.trim()) {
-    appendLog($('prov-log'), line);
+    appendLog($('prov-log'), ...describeLogLine(line));
   }
+}
+
+// Firmware log lines (see main.cpp):
+//   "# mqtt rx home/esp32-x/relay/3/set = ON"      command received from the broker
+//   "# relay CH3 GPIO18 -> ON (pin LOW, ...) [mqtt]" relay switched
+//   "# mqtt tx home/esp32-x/relay/3/state = ON"    state published back
+function describeLogLine(line) {
+  let m;
+  if ((m = line.match(/^# mqtt rx (\S+) = (.*)$/))) return [`◀ รับ  ${m[1]}  =  ${m[2]}`, 'mqtt-rx'];
+  if ((m = line.match(/^# mqtt tx (\S+) = (.*)$/))) return [`▶ ส่ง  ${m[1]}  =  ${m[2]}`, 'mqtt-tx'];
+  if ((m = line.match(/^# relay CH(\d+) GPIO(\d+) -> (ON|OFF)(.*)$/))) {
+    setRowState(Number(m[1]), m[3] === 'ON');
+    return [`● รีเลย์ CH${m[1]} → GPIO${m[2]}  ${m[3]}${m[4]}`, 'relay-ev'];
+  }
+  if ((m = line.match(/^# pinmap CH(\d+) -> GPIO(\d+) \((ON|OFF)\)$/))) {
+    setRowState(Number(m[1]), m[3] === 'ON', false);
+    return [`● ผังขา CH${m[1]} → GPIO${m[2]} (${m[3]})`, 'relay-ev'];
+  }
+  if (line.startsWith('# topics:')) return [line, 'mqtt-rx'];
+  if (line.startsWith('# bad relay cmd')) return [line, 'err'];
+  return [line];
 }
 
 async function writeLine(line, logAs = line) {
@@ -191,31 +214,59 @@ function showInfo(info) {
   f.restore_state.checked = info.restore_state !== false;
   $('prov-fields').disabled = false;
 
-  renderRelayTest(info.relay_count || 8, info.relay_mask || 0);
+  renderPinMap(info);
 }
 
-function renderRelayTest(count, mask) {
-  const wrap = $('prov-relays');
-  wrap.replaceChildren(...Array.from({ length: count }, (_, i) => {
+// Firmware default pin map (used when talking to firmware older than 1.0.3, which doesn't report it).
+const DEFAULT_PINS = [16, 17, 18, 19, 23, 25, 26, 27];
+
+// Where each GPIO sits on the ESP32-DevKitC V4 headers (pin 1 = end next to the 3V3 / GND corner,
+// counted toward the USB connector). The number is also printed next to the pin on the board.
+const DEVKITC_HEADER = {
+  16: 'J3 ขาที่ 12 (ขวา)', 17: 'J3 ขาที่ 11 (ขวา)', 18: 'J3 ขาที่ 9 (ขวา)', 19: 'J3 ขาที่ 8 (ขวา)',
+  23: 'J3 ขาที่ 2 (ขวา)', 25: 'J2 ขาที่ 9 (ซ้าย)', 26: 'J2 ขาที่ 10 (ซ้าย)', 27: 'J2 ขาที่ 11 (ซ้าย)',
+};
+
+function renderPinMap(info) {
+  const count = info.relay_count || 8;
+  const pins = info.relay_pins || DEFAULT_PINS.slice(0, count);
+  const prefix = info.topic_prefix || `${info.base || 'home'}/${info.device_id}/`;
+  const mask = info.relay_mask || 0;
+
+  $('prov-relays').replaceChildren(...pins.map((gpio, i) => {
     const ch = i + 1;
-    const on = !!(mask & (1 << i));
-    return el('div', { class: 'relay' },
-      el('span', { class: 'name' }, `CH${ch}`),
-      el('button', {
-        class: 'switch', role: 'switch', 'aria-checked': String(on), 'aria-label': `Relay ${ch}`,
-        onclick: async e => {
-          const btn = e.currentTarget;
-          btn.classList.add('pending');
-          try {
-            const res = await request({ cmd: 'relay', ch, state: 'TOGGLE' });
-            if (res.ok) btn.setAttribute('aria-checked', String(res.state === 'ON'));
-            else toast(res.error || 'error');
-          } catch (err) { toast(err.message); }
-          btn.classList.remove('pending');
-        },
-      }),
+    const topic = `${prefix}relay/${ch}/set`;
+    const send = state => async () => {
+      try {
+        const res = await request({ cmd: 'relay', ch, state });
+        if (!res.ok) toast(res.error || 'error');
+        else setRowState(ch, res.state === 'ON');
+      } catch (err) { toast(err.message); }
+    };
+    return el('tr', { 'data-ch': ch },
+      el('td', {}, el('b', {}, `CH${ch}`)),
+      el('td', { class: 'gpio' }, `GPIO${gpio}`),
+      el('td', {}, `ขา “${gpio}” · ${DEVKITC_HEADER[gpio] || '—'}`),
+      el('td', {}, `IN${ch} ของโมดูลรีเลย์`),
+      el('td', { class: 'topic' }, topic,
+        el('button', { class: 'copy', title: 'คัดลอก topic', onclick: () => navigator.clipboard?.writeText(topic).then(() => toast(`คัดลอก ${topic}`)) }, '⧉')),
+      el('td', { class: 'state' }),
+      el('td', {},
+        el('div', { class: 'row' },
+          el('button', { class: 'btn small', onclick: send('ON') }, 'ON'),
+          el('button', { class: 'btn small', onclick: send('OFF') }, 'OFF'))),
     );
   }));
+  pins.forEach((_, i) => setRowState(i + 1, !!(mask & (1 << i)), false));
+}
+
+function setRowState(ch, on, flash = true) {
+  const row = $('prov-relays').querySelector(`tr[data-ch="${ch}"]`);
+  if (!row) return;
+  const cell = row.querySelector('.state');
+  cell.textContent = on ? '● ON' : '○ OFF';
+  cell.className = `state ${on ? 'state-on' : 'state-off'}`;
+  if (flash) { row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); }
 }
 
 async function scan() {
