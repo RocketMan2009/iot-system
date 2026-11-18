@@ -81,6 +81,11 @@ python -m http.server 8080 --directory web
 | `home/<id>/info` | JSON (retained, ใช้ค้นหาบอร์ด) |
 | `home/<id>/telemetry` | JSON ทุก 30 วินาที |
 | `home/<id>/cmd` | `reboot` / `ping` / `all_off` |
+| `home/<id>/schedule/set` | JSON ตารางเวลา เช่น `[{"ch":1,"t":"18:30","a":"ON","d":127,"en":true}]` |
+| `home/<id>/schedule` | ตารางเวลาที่ใช้งานอยู่ + เวลาบนบอร์ด (retained) |
+
+**ตั้งเวลาเปิด-ปิด:** แท็บแดชบอร์ด → การ์ด “ตั้งเวลาเปิด-ปิดอัตโนมัติ” — ตารางเวลาทำงานบนบอร์ดเอง ปิดเว็บก็ยังทำงาน
+**เลือกขารีเลย์เอง:** แท็บตั้งค่าบอร์ด (USB) → คลิกขาสีเขียวบนรูป ESP32 (1–15 ขา) → บันทึกลงบอร์ด
 
 ทดสอบจาก command line:
 ```bash

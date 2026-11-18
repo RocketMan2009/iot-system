@@ -61,6 +61,32 @@
         <div class="empty">เชื่อมต่อ broker เพื่อค้นหาบอร์ดอัตโนมัติ (จาก topic <code>&lt;base&gt;/+/info</code>)</div>
       </div>
 
+      <div class="card sched">
+        <div class="card-head">
+          <h2>ตั้งเวลาเปิด-ปิดอัตโนมัติ</h2>
+          <span id="sched-status" class="muted"></span>
+        </div>
+        <p class="muted small-note">
+          ตารางเวลาถูกเก็บและทำงาน<b>บนบอร์ด ESP32</b> — ปิดเว็บหรือคอมก็ยังเปิด-ปิดตามเวลา
+          (บอร์ดใช้นาฬิกาจากอินเทอร์เน็ต NTP ตาม Timezone ที่ตั้งไว้ในแท็บตั้งค่าบอร์ด)
+        </p>
+        <div class="sched-head">
+          <label class="row">บอร์ด <select id="sched-device"><option value="">— ยังไม่พบบอร์ด —</option></select></label>
+          <span id="sched-clock" class="mono muted"></span>
+        </div>
+        <div class="table-wrap">
+          <table class="pinmap sched-table">
+            <thead><tr><th>ใช้งาน</th><th>ช่องรีเลย์</th><th>เวลา</th><th>สั่ง</th><th>ทำงานวัน</th><th></th></tr></thead>
+            <tbody id="sched-rows"><tr><td colspan="6" class="sched-empty">เชื่อมต่อ broker และเลือกบอร์ด</td></tr></tbody>
+          </table>
+        </div>
+        <div class="actions">
+          <button id="sched-add" class="btn small" type="button" disabled>+ เพิ่มเวลา</button>
+          <button id="sched-save" class="btn primary" type="button" disabled>บันทึกลงบอร์ด</button>
+          <button id="sched-revert" class="btn small" type="button" disabled>ยกเลิกการแก้ไข</button>
+        </div>
+      </div>
+
       <div class="card monitor">
         <div class="card-head">
           <h2>MQTT Monitor</h2>
@@ -114,7 +140,7 @@
               <label>MQTT Password <input name="mqtt_pass" type="password" placeholder="(เว้นว่าง = ใช้ค่าเดิม)" /></label>
               <label>Device ID <input name="device_id" pattern="[A-Za-z0-9_\-]{1,32}" /></label>
               <label>Base topic <input name="base" value="home" pattern="[A-Za-z0-9_\-/]{1,32}" /></label>
-              <label>จำนวนรีเลย์ <input name="relay_count" type="number" min="1" max="8" value="8" /></label>
+              <label>Timezone (สำหรับตั้งเวลา) <input name="tz" value="ICT-7" maxlength="40" title="POSIX TZ — ประเทศไทย = ICT-7" /></label>
               <div class="checks">
                 <label class="check"><input type="checkbox" name="mqtt_tls" /> ใช้ TLS (MQTTS — Cloud broker port 8883)</label>
                 <label class="check"><input type="checkbox" name="active_low" checked /> รีเลย์ Active-LOW</label>
@@ -126,6 +152,32 @@
               </div>
             </fieldset>
           </form>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>เลือกขา GPIO สำหรับรีเลย์</h2>
+          <span id="pick-count" class="pill on"></span>
+        </div>
+        <p class="muted small-note">
+          คลิก<b>ขาสีเขียว</b>บนรูปบอร์ดเพื่อใช้เป็นรีเลย์ — ลำดับที่คลิกคือ CH1, CH2, … · คลิกซ้ำเพื่อเอาออก ·
+          ขาสีอื่นต่อรีเลย์ไม่ได้ (ชี้เมาส์ที่ขาเพื่อดูเหตุผล)
+        </p>
+        <div class="picker-layout">
+          <div id="pin-picker" class="pin-picker"></div>
+          <div class="picker-side">
+            <h3>ช่องรีเลย์ที่เลือก</h3>
+            <ol id="pick-list" class="pick-list"></ol>
+            <div class="actions">
+              <button id="pick-default" class="btn small" type="button">ค่าเริ่มต้น (8 ช่อง)</button>
+              <button id="pick-clear" class="btn small" type="button">ล้าง</button>
+            </div>
+            <div class="actions">
+              <button id="pick-save" class="btn primary" type="button" disabled>บันทึกขาลงบอร์ด &amp; รีบูต</button>
+            </div>
+            <p id="pick-note" class="muted small-note">เชื่อมต่อบอร์ดผ่าน USB เพื่อบันทึก — วางแผนต่อสายได้เลยโดยไม่ต้องต่อบอร์ด</p>
+          </div>
         </div>
       </div>
 
@@ -251,7 +303,7 @@
           <a class="btn small" href="img/architecture.svg" target="_blank" rel="noopener">เปิดภาพเต็ม</a>
         </div>
         <div class="diagram-wrap">
-          <img src="img/architecture.svg" alt="แผนภาพสถาปัตยกรรม MQTT: Web Dashboard และแอปภายนอก publish คำสั่งไปที่ relay/N/set บน broker, ESP32 subscribe แล้วสั่ง GPIO ไปที่โมดูลรีเลย์ และ publish relay/N/state กลับผ่าน broker" width="1200" height="780" />
+          <img src="img/architecture.svg" alt="แผนภาพสถาปัตยกรรม MQTT: Web Dashboard และแอปภายนอก publish คำสั่งไปที่ relay/N/set บน broker, ESP32 subscribe แล้วสั่ง GPIO ไปที่โมดูลรีเลย์ และ publish relay/N/state กลับผ่าน broker" width="1200" height="820" />
         </div>
       </div>
 

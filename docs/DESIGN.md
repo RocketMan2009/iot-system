@@ -111,6 +111,8 @@ Web ─ requestPort() ─► esptool-js: DTR/RTS reset เข้า ROM bootload
 | `<base>/<id>/relay/<n>/set` | →ESP | `ON` / `OFF` / `TOGGLE` | 1 | ✘ | **ห้าม retain** (กันสั่งซ้ำตอน reconnect) |
 | `<base>/<id>/telemetry` | ESP→ | JSON: `{rssi, uptime, heap, ip}` | 0 | ✘ | ทุก 30 วินาที |
 | `<base>/<id>/cmd` | →ESP | `reboot` / `ping` / `all_off` | 1 | ✘ | คำสั่งระดับอุปกรณ์ |
+| `<base>/<id>/schedule/set` | →ESP | JSON array ของ rule (ดู §3.8) | 1 | ✘ | แทนที่ตารางเวลาทั้งหมด |
+| `<base>/<id>/schedule` | ESP→ | `{tz, time, rules:[…]}` | 1 | ✔ | ตารางเวลาที่ใช้งานจริง; ถ้าคำสั่งผิดจะส่งแบบไม่ retain พร้อม `error` |
 
 Discovery: เว็บ subscribe `<base>/+/info` และ `<base>/+/status` → ได้รายการบอร์ดทั้งหมดทันทีจาก retained messages
 
@@ -125,6 +127,8 @@ Discovery: เว็บ subscribe `<base>/+/info` และ `<base>/+/status` �
 | `{"cmd":"info"}` | `{"ok":true,"type":"info","info":{fw,chip,mac,id,wifi_ssid,mqtt_host,mqtt_port,base,active_low,wifi:"connected"/...,ip,mqtt:bool}}` |
 | `{"cmd":"scan"}` | `{"ok":true,"type":"scan","networks":[{"ssid","rssi","secure"}]}` |
 | `{"cmd":"set_config","wifi_ssid":..,"wifi_pass":..,"mqtt_host":..,"mqtt_port":1883,"mqtt_user":..,"mqtt_pass":..,"device_id":..,"base":..,"active_low":true}` | `{"ok":true,"type":"set_config"}` แล้ว reboot |
+| `{"cmd":"set_config","relay_pins":[16,17,32],"tz":"ICT-7"}` | เลือกขารีเลย์เอง (1–15 ขาจาก safe list) และ timezone — ขาที่ไม่ปลอดภัยถูกปฏิเสธก่อนบันทึก |
+| `{"cmd":"set_schedule","rules":[…]}` | `{"ok":true,"type":"set_schedule","count":N}` |
 | `{"cmd":"relay","ch":1,"state":"TOGGLE"}` | `{"ok":true,"type":"relay","ch":1,"state":"ON"}` (ทดสอบสายไฟก่อนติดตั้ง) |
 | `{"cmd":"reboot"}` / `{"cmd":"factory_reset"}` | `{"ok":true,...}` |
 
@@ -148,6 +152,10 @@ loop():   serialTask()  ─ อ่าน JSON line, ไม่ block
 - ถ้ายังไม่มี config Wi-Fi → บอร์ดรออยู่ใน "provisioning mode" และพิมพ์ hint ทาง serial
 
 ### 3.4 Pin Assignment (ESP32-WROOM-32D) — ผ่าน `validate_pinmap.py` แล้ว ✔
+
+ตั้งแต่ v1.0.6 เลือกขาเองได้จากรูปบอร์ดในแท็บ “ตั้งค่าบอร์ด (USB)” — เฉพาะขาใน safe list:
+`4, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33` (14 = PWM สั้น ๆ ตอนบูต, 21/22 = I²C ปกติ)
+เฟิร์มแวร์ตรวจซ้ำและปฏิเสธขาอื่น; เปลี่ยนขาแล้วสถานะรีเลย์ทุกช่องเริ่มที่ OFF. ตารางด้านล่างคือค่าเริ่มต้น:
 
 | Channel | GPIO | เหตุผล |
 |---|---|---|
@@ -202,6 +210,27 @@ State ฝั่งเว็บ: ค่าการเชื่อมต่อ br
 | LAN | `http://localhost` | Mosquitto (Docker) | MQTT 1883 | WS 9001 |
 
 ขั้นตอนนำขึ้นเว็บ: [DEPLOY.md](DEPLOY.md)
+
+### 3.8 Schedules (ตั้งเวลาเปิด-ปิด)
+
+ตารางเวลาเก็บใน NVS และ**ทำงานบนบอร์ด** (ไม่ต้องเปิดเว็บ/ไม่ต้องมี server)
+
+```json
+[{"ch":1,"t":"18:30","a":"ON","d":127,"en":true},
+ {"ch":1,"t":"23:00","a":"OFF","d":62,"en":true}]
+```
+| field | ความหมาย |
+|---|---|
+| `ch` | ช่องรีเลย์ 1..N |
+| `t` | เวลาท้องถิ่น `HH:MM` |
+| `a` | `ON` / `OFF` |
+| `d` | bitmask วัน: bit0 = อาทิตย์ … bit6 = เสาร์ (127 = ทุกวัน, 62 = จ–ศ, 65 = ส–อา) |
+| `en` | เปิด/ปิด rule นั้น |
+
+- สูงสุด 20 rule; เวลาท้องถิ่นจาก NTP + POSIX TZ (`ICT-7` = ประเทศไทย) ตั้งในแท็บตั้งค่าบอร์ด
+- ตรวจทุกนาที — rule ที่ตรงกับวันและ `HH:MM` จะสั่ง `setRelay` (log `[schedule]`) และ publish `/state` เหมือนสั่งจาก MQTT
+- ถ้าบอร์ดยังไม่ได้เวลา (ยังไม่ต่อเน็ต) จะไม่ทำงานตามเวลา จนกว่า NTP จะซิงก์ — หลังไฟดับสถานะรีเลย์มาจาก NVS (`restore_state`)
+- ทางเลือกที่ไม่ได้เลือก: ให้เว็บหรือ server เป็นตัวจับเวลา → ต้องเปิดค้างไว้ตลอด / ต้องมี backend
 
 ---
 

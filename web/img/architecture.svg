@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" viewBox="0 0 1200 780" width="1200" height="780" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" viewBox="0 0 1200 820" width="1200" height="820" role="img" aria-labelledby="title desc">
   <title id="title">ESP32 Control Hub — สถาปัตยกรรม MQTT</title>
   <desc id="desc">Web dashboard and external MQTT apps publish commands to relay/N/set on the MQTT broker; the ESP32 subscribes, drives GPIO to the relay module and publishes relay/N/state, status, info and telemetry back through the broker. USB Web Serial and GitHub Actions/Pages are separate paths that do not use MQTT.</desc>
   <style>
@@ -32,7 +32,7 @@
     <marker id="m-side" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--side)"/></marker>
   </defs>
 
-  <rect class="bg" x="0" y="0" width="1200" height="780" rx="16"/>
+  <rect class="bg" x="0" y="0" width="1200" height="820" rx="16"/>
 
   <!-- header -->
   <text class="title" x="40" y="50">ESP32 Control Hub — สถาปัตยกรรม MQTT</text>
@@ -79,29 +79,31 @@
   <line class="sep" x1="600" y1="334" x2="600" y2="354" stroke-dasharray="3 3"/>
 
   <!-- topic tree -->
-  <rect class="box" x="440" y="354" width="320" height="230" rx="12"/>
+  <rect class="box" x="440" y="354" width="320" height="270" rx="12"/>
   <text class="bt" x="458" y="382">Topic ของบอร์ด 1 ตัว</text>
   <text class="mono" x="458" y="410">ROCKET/esp32-0118d8/</text>
   <text class="mono cmd" x="458" y="434">├ relay/N/set    ◀ ON|OFF|TOGGLE</text>
   <text class="mono st" x="458" y="456">├ relay/N/state  ▶ ON|OFF   (R)</text>
   <text class="mono st" x="458" y="478">├ status         ▶ online|offline (R)</text>
   <text class="mono st" x="458" y="500">├ info           ▶ JSON ผังขา  (R)</text>
-  <text class="mono st" x="458" y="522">├ telemetry      ▶ RSSI, uptime</text>
-  <text class="mono cmd" x="458" y="544">└ cmd            ◀ reboot|ping|all_off</text>
-  <text class="muted" x="458" y="570" style="font-size:12px">(R) = retained · N = 1–8 · ◀ เข้าบอร์ด ▶ ออกจากบอร์ด</text>
+  <text class="mono st" x="458" y="522">├ telemetry      ▶ RSSI, เวลาบอร์ด</text>
+  <text class="mono cmd" x="458" y="544">├ schedule/set   ◀ JSON ตารางเวลา</text>
+  <text class="mono st" x="458" y="566">├ schedule       ▶ JSON ตารางเวลา (R)</text>
+  <text class="mono cmd" x="458" y="588">└ cmd            ◀ reboot|ping|all_off</text>
+  <text class="muted" x="458" y="612" style="font-size:12px">(R) = retained · N = 1–15 · ◀ เข้าบอร์ด ▶ ออกจากบอร์ด</text>
 
   <!-- device -->
-  <rect class="box hub" x="900" y="124" width="260" height="200" rx="12"/>
+  <rect class="box hub" x="900" y="124" width="280" height="200" rx="12"/>
   <text class="bt" x="916" y="152">ESP32-DevKitC</text>
   <text class="muted" x="916" y="174">WROOM-32D · เฟิร์มแวร์ v1.0.x</text>
-  <text class="mono cmd" x="916" y="204">SUB relay/+/set , cmd</text>
+  <text class="mono cmd" x="916" y="204">SUB relay/+/set, schedule/set, cmd</text>
   <text class="mono st" x="916" y="226">PUB state, status,</text>
-  <text class="mono st" x="916" y="246">    info, telemetry</text>
+  <text class="mono st" x="916" y="246">    info, telemetry, schedule</text>
   <text x="916" y="274">NVS: Wi-Fi/MQTT + สถานะรีเลย์</text>
-  <text x="916" y="298">Watchdog · reconnect อัตโนมัติ</text>
+  <text x="916" y="298">ตั้งเวลาเปิด-ปิดบนบอร์ด (NTP)</text>
 
-  <rect class="box" x="900" y="354" width="260" height="230" rx="12"/>
-  <text class="bt" x="916" y="382">โมดูลรีเลย์ 8 ช่อง</text>
+  <rect class="box" x="900" y="354" width="280" height="270" rx="12"/>
+  <text class="bt" x="916" y="382">โมดูลรีเลย์ (ค่าเริ่มต้น 8 ช่อง)</text>
   <text class="mono" x="916" y="410">CH1 · GPIO16</text>
   <text class="mono" x="916" y="432">CH2 · GPIO17</text>
   <text class="mono" x="916" y="454">CH3 · GPIO18</text>
@@ -113,6 +115,7 @@
   <text x="916" y="508">GPIO → IN1…IN8 (active-LOW)</text>
   <text class="muted" x="916" y="532">GND ร่วม · ไฟเลี้ยงโมดูล 5V</text>
   <text class="muted" x="916" y="560">↓ โหลด: หลอดไฟ · ปั๊ม · พัดลม</text>
+  <text x="916" y="594" style="fill:var(--accent)">เลือกขาเองได้ 1–15 ขา จากรูปบอร์ด</text>
 
   <!-- MQTT arrows: clients <-> broker -->
   <line class="a-cmd" x1="282" y1="170" x2="434" y2="170"/>
@@ -136,27 +139,27 @@
   <text class="lbl" x="1042" y="344" style="fill:var(--accent)">③ GPIO</text>
 
   <!-- side paths (not MQTT) -->
-  <line class="sep" x1="40" y1="610" x2="1160" y2="610"/>
-  <text class="h" x="40" y="636">เส้นทางที่ไม่ผ่าน MQTT</text>
+  <line class="sep" x1="40" y1="650" x2="1160" y2="650"/>
+  <text class="h" x="40" y="676">เส้นทางที่ไม่ผ่าน MQTT</text>
 
-  <rect class="box" x="40" y="650" width="240" height="44" rx="8"/>
-  <text x="56" y="677">เบราว์เซอร์ · แท็บ USB / แฟลช</text>
-  <line class="a-side" x1="282" y1="672" x2="434" y2="672"/>
-  <text class="muted" x="358" y="664" text-anchor="middle" style="font-size:12px">สาย USB · Web Serial</text>
-  <rect class="box" x="440" y="650" width="320" height="44" rx="8"/>
-  <text x="456" y="677">ตั้งค่า Wi-Fi/MQTT · ทดสอบรีเลย์ · แฟลช</text>
-  <line class="a-side" x1="762" y1="672" x2="894" y2="672"/>
-  <rect class="box" x="900" y="650" width="260" height="44" rx="8"/>
-  <text x="916" y="677">ESP32 (COM3 · CP210x)</text>
+  <rect class="box" x="40" y="690" width="240" height="44" rx="8"/>
+  <text x="56" y="717">เบราว์เซอร์ · แท็บ USB / แฟลช</text>
+  <line class="a-side" x1="282" y1="712" x2="434" y2="712"/>
+  <text class="muted" x="358" y="704" text-anchor="middle" style="font-size:12px">สาย USB · Web Serial</text>
+  <rect class="box" x="440" y="690" width="320" height="44" rx="8"/>
+  <text x="456" y="717">ตั้งค่า Wi-Fi/MQTT · ทดสอบรีเลย์ · แฟลช</text>
+  <line class="a-side" x1="762" y1="712" x2="894" y2="712"/>
+  <rect class="box" x="900" y="690" width="260" height="44" rx="8"/>
+  <text x="916" y="717">ESP32 (COM3 · CP210x)</text>
 
-  <rect class="box" x="40" y="712" width="240" height="44" rx="8"/>
-  <text x="56" y="739">แก้โค้ดใน GitHub (main.cpp)</text>
-  <line class="a-side" x1="282" y1="734" x2="434" y2="734"/>
-  <text class="muted" x="358" y="726" text-anchor="middle" style="font-size:12px">push</text>
-  <rect class="box" x="440" y="712" width="320" height="44" rx="8"/>
-  <text x="456" y="739">GitHub Actions build เฟิร์มแวร์ (PlatformIO)</text>
-  <line class="a-side" x1="762" y1="734" x2="894" y2="734"/>
-  <text class="muted" x="828" y="726" text-anchor="middle" style="font-size:12px">deploy</text>
-  <rect class="box" x="900" y="712" width="260" height="44" rx="8"/>
-  <text x="916" y="739">GitHub Pages: เว็บ + merged.bin</text>
+  <rect class="box" x="40" y="752" width="240" height="44" rx="8"/>
+  <text x="56" y="779">แก้โค้ดใน GitHub (main.cpp)</text>
+  <line class="a-side" x1="282" y1="774" x2="434" y2="774"/>
+  <text class="muted" x="358" y="766" text-anchor="middle" style="font-size:12px">push</text>
+  <rect class="box" x="440" y="752" width="320" height="44" rx="8"/>
+  <text x="456" y="779">GitHub Actions build เฟิร์มแวร์ (PlatformIO)</text>
+  <line class="a-side" x1="762" y1="774" x2="894" y2="774"/>
+  <text class="muted" x="828" y="766" text-anchor="middle" style="font-size:12px">deploy</text>
+  <rect class="box" x="900" y="752" width="260" height="44" rx="8"/>
+  <text x="916" y="779">GitHub Pages: เว็บ + merged.bin</text>
 </svg>

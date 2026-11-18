@@ -1,5 +1,6 @@
 // USB provisioning over Web Serial. Protocol: docs/DESIGN.md §3.2 (newline-delimited JSON @115200)
 import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint } from './util.js';
+import { createPinPicker, headerPosition, DEFAULT_PINS } from './pin-picker.js';
 
 const $ = id => document.getElementById(id);
 const LOCK = 'ตั้งค่าบอร์ด';
@@ -11,6 +12,7 @@ const waiters = new Map();   // response type -> {resolve, reject, timer}
 let lastInfo = null;
 
 export function initProvision() {
+  initPicker();   // usable without a board, for planning the wiring
   if (!('serial' in navigator)) {
     $('prov-connect').disabled = true;
     return;
@@ -84,6 +86,7 @@ function cleanup(msg) {
   $('prov-fields').disabled = true;
   $('prov-relays').replaceChildren(el('tr', {},
     el('td', { colspan: 7, class: 'muted' }, 'เชื่อมต่อบอร์ดผ่าน USB เพื่อดูผังขาและทดสอบรีเลย์')));
+  renderPickList();
   if (msg) toast(msg);
 }
 
@@ -213,12 +216,13 @@ function showInfo(info) {
   f.mqtt_pass.placeholder = info.has_mqtt_pass ? '(เว้นว่าง = ใช้ค่าเดิม)' : '';
   f.device_id.value = info.device_id || '';
   f.base.value = info.base || 'home';
-  f.relay_count.value = info.relay_count || 8;
+  f.tz.value = info.tz || 'ICT-7';
   f.active_low.checked = !!info.active_low;
   f.restore_state.checked = info.restore_state !== false;
   $('prov-fields').disabled = false;
 
   renderPinMap(info);
+  syncPicker(info);
 }
 
 // ---------- outdated firmware warning ----------
@@ -243,16 +247,6 @@ async function checkFirmwareVersion(info) {
   toast(msg, 8000);
 }
 
-// Firmware default pin map (used when talking to firmware older than 1.0.3, which doesn't report it).
-const DEFAULT_PINS = [16, 17, 18, 19, 23, 25, 26, 27];
-
-// Where each GPIO sits on the ESP32-DevKitC V4 headers (pin 1 = end next to the 3V3 / GND corner,
-// counted toward the USB connector). The number is also printed next to the pin on the board.
-const DEVKITC_HEADER = {
-  16: 'J3 ขาที่ 12 (ขวา)', 17: 'J3 ขาที่ 11 (ขวา)', 18: 'J3 ขาที่ 9 (ขวา)', 19: 'J3 ขาที่ 8 (ขวา)',
-  23: 'J3 ขาที่ 2 (ขวา)', 25: 'J2 ขาที่ 9 (ซ้าย)', 26: 'J2 ขาที่ 10 (ซ้าย)', 27: 'J2 ขาที่ 11 (ซ้าย)',
-};
-
 function renderPinMap(info) {
   const count = info.relay_count || 8;
   const pins = info.relay_pins || DEFAULT_PINS.slice(0, count);
@@ -272,7 +266,7 @@ function renderPinMap(info) {
     return el('tr', { 'data-ch': ch },
       el('td', {}, el('b', {}, `CH${ch}`)),
       el('td', { class: 'gpio' }, `GPIO${gpio}`),
-      el('td', {}, `ขา “${gpio}” · ${DEVKITC_HEADER[gpio] || '—'}`),
+      el('td', {}, `ขา “${gpio}” · ${headerPosition(gpio) || '—'}`),
       el('td', {}, `IN${ch} ของโมดูลรีเลย์`),
       el('td', { class: 'topic' }, topic,
         el('button', { class: 'copy', title: 'คัดลอก topic', onclick: () => navigator.clipboard?.writeText(topic).then(() => toast(`คัดลอก ${topic}`)) }, '⧉')),
@@ -329,7 +323,7 @@ async function saveConfig() {
     mqtt_user: f.mqtt_user.value.trim(),
     device_id: f.device_id.value.trim(),
     base: f.base.value.trim().replace(/\/+$/, '') || 'home',
-    relay_count: Number(f.relay_count.value) || 8,
+    tz: f.tz.value.trim() || 'ICT-7',
     active_low: f.active_low.checked,
     restore_state: f.restore_state.checked,
   };
@@ -337,6 +331,8 @@ async function saveConfig() {
   if (f.wifi_pass.value) payload.wifi_pass = f.wifi_pass.value;
   if (f.mqtt_pass.value) payload.mqtt_pass = f.mqtt_pass.value;
   if (!payload.device_id) delete payload.device_id;
+  if (lastInfo?.safe_pins) payload.relay_pins = picker.getPins();   // firmware >= 1.0.6
+  if (payload.relay_pins && !payload.relay_pins.length) return toast('เลือกขารีเลย์อย่างน้อย 1 ขา');
 
   // never echo passwords into the console log
   const shown = { ...payload };
@@ -355,6 +351,51 @@ async function saveConfig() {
   } catch (err) {
     toast(`บันทึกไม่สำเร็จ: ${err.message}`, 5000);
     $('prov-fields').disabled = false;
+  }
+}
+
+// ---------- relay pin picker ----------
+let picker;
+
+function initPicker() {
+  picker = createPinPicker($('pin-picker'), { onChange: renderPickList });
+  $('pick-default').addEventListener('click', () => { picker.setPins(DEFAULT_PINS); renderPickList(); });
+  $('pick-clear').addEventListener('click', () => { picker.setPins([]); renderPickList(); });
+  $('pick-save').addEventListener('click', savePins);
+  renderPickList();
+}
+
+function renderPickList() {
+  const pins = picker.getPins();
+  $('pick-count').textContent = `${pins.length} ช่อง`;
+  $('pick-list').replaceChildren(...(pins.length
+    ? pins.map((g, i) => el('li', {}, el('b', {}, `CH${i + 1}`), ` → GPIO${g}`, el('span', { class: 'muted' }, ` · ${headerPosition(g)}`)))
+    : [el('li', { class: 'muted' }, 'ยังไม่ได้เลือก — คลิกขาสีเขียวบนรูป')]));
+  const changed = lastInfo?.relay_pins && pins.join() !== lastInfo.relay_pins.join();
+  $('pick-save').disabled = !port || !lastInfo?.safe_pins || !pins.length || !changed;
+}
+
+function syncPicker(info) {
+  picker.setPins(info.relay_pins || DEFAULT_PINS.slice(0, info.relay_count || 8));
+  $('pick-note').textContent = info.safe_pins
+    ? 'เปลี่ยนขาแล้วบอร์ดจะรีบูต และรีเลย์ทุกช่องเริ่มที่ OFF'
+    : `เฟิร์มแวร์บนบอร์ด (v${info.fw}) ยังเลือกขาเองไม่ได้ — แฟลชเฟิร์มแวร์ล่าสุดก่อน`;
+  renderPickList();
+}
+
+async function savePins() {
+  const pins = picker.getPins();
+  if (!confirm(`บันทึกขารีเลย์ใหม่ ${pins.length} ช่อง (${pins.map((g, i) => `CH${i + 1}=GPIO${g}`).join(', ')}) แล้วรีบูตบอร์ด?`)) return;
+  $('pick-save').disabled = true;
+  try {
+    const res = await request({ cmd: 'set_config', relay_pins: pins }, 3000);
+    if (!res.ok) throw new Error(res.error || 'board rejected pins');
+    toast('บันทึกขาแล้ว — บอร์ดกำลังรีบูต…');
+    await sleep(4000);
+    await refreshInfo(4);
+  } catch (err) {
+    toast(`บันทึกไม่สำเร็จ: ${err.message}`, 6000);
+    renderPickList();
   }
 }
 

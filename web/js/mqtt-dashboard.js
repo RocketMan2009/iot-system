@@ -25,6 +25,7 @@ export function initDashboard() {
   $('mqtt-disconnect').addEventListener('click', disconnect);
   $('mon-form').addEventListener('submit', e => { e.preventDefault(); subscribeMonitor($('mon-filter').value.trim() || '#'); });
   $('mon-clear').addEventListener('click', () => $('mon-log').replaceChildren());
+  initSchedule();
   setInterval(() => devices.size && render(), 15000);   // refresh "last seen" texts
 }
 
@@ -43,7 +44,7 @@ function connect(form) {
   render();
 
   setPill($('mqtt-status'), 'Connecting…', 'busy');
-  client = mqtt.connect(f.url, {
+  const c = mqtt.connect(f.url, {
     username: f.username || undefined,
     password: f.password || undefined,
     clientId: `web-${Math.random().toString(16).slice(2, 10)}`,
@@ -52,20 +53,24 @@ function connect(form) {
     connectTimeout: 8000,
     keepalive: 30,
   });
+  client = c;
 
-  client.on('connect', () => {
+  // Events from a previous (replaced) client must not touch the UI: check `client === c`.
+  const current = fn => (...args) => { if (client === c) fn(...args); };
+  c.on('connect', current(() => {
     setPill($('mqtt-status'), 'Connected', 'on');
     $('mqtt-connect').disabled = true;
     $('mqtt-disconnect').disabled = false;
-    client.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`], { qos: 1 });
+    c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`], { qos: 1 });
     monitorFilter = null;
     subscribeMonitor($('mon-filter').value.trim() || '#');
-  });
-  client.on('reconnect', () => setPill($('mqtt-status'), 'Reconnecting…', 'busy'));
-  client.on('offline', () => setPill($('mqtt-status'), 'Offline', 'err'));
-  client.on('error', err => { setPill($('mqtt-status'), 'Error', 'err'); toast(`MQTT: ${err.message}`, 5000); });
-  client.on('close', () => { if (client) setPill($('mqtt-status'), 'Disconnected', 'off'); });
-  client.on('message', onMessage);
+    updateScheduleButtons();
+  }));
+  c.on('reconnect', current(() => setPill($('mqtt-status'), 'Reconnecting…', 'busy')));
+  c.on('offline', current(() => setPill($('mqtt-status'), 'Offline', 'err')));
+  c.on('error', current(err => { setPill($('mqtt-status'), 'Error', 'err'); toast(`MQTT: ${err.message}`, 5000); }));
+  c.on('close', current(() => setPill($('mqtt-status'), 'Disconnected', 'off')));
+  c.on('message', current(onMessage));
 }
 
 function disconnect() {
@@ -88,7 +93,8 @@ function onMessage(topic, payload, packet) {
   if (!topic.startsWith(`${base}/`)) return;
   const rest = topic.slice(base.length + 1).split('/');   // [id, kind, ...]
   const [id, kind] = rest;
-  if (!['info', 'status', 'telemetry', 'relay'].includes(kind) || (kind === 'relay' && rest[3] !== 'state')) return;
+  if (!['info', 'status', 'telemetry', 'relay', 'schedule'].includes(kind)) return;
+  if ((kind === 'relay' && rest[3] !== 'state') || (kind === 'schedule' && rest.length !== 2)) return;   // commands, not state
 
   // empty retained payload = device was "forgotten"
   if (text === '' && (kind === 'info' || kind === 'status')) {
@@ -108,6 +114,11 @@ function onMessage(topic, payload, packet) {
     d.status = text;
   } else if (kind === 'telemetry') {
     try { d.telemetry = JSON.parse(text); } catch { return; }
+    if (id === schedId) renderClock();
+  } else if (kind === 'schedule') {
+    try { d.schedule = JSON.parse(text); } catch { return; }
+    onScheduleMessage(id, d.schedule);
+    return render();
   } else if (kind === 'relay' && rest[3] === 'state') {
     const ch = Number(rest[2]);
     d.states[ch] = text === 'ON';
@@ -152,7 +163,7 @@ function logMonitor(topic, text, retained) {
   if (key === lastMsg.key && Date.now() - lastMsg.t < 50) return;
   lastMsg = { key, t: Date.now() };
 
-  const isCmd = /\/relay\/[^/]*\/set\s*$/i.test(topic) || /\/cmd\s*$/i.test(topic);
+  const isCmd = /\/relay\/[^/]*\/set\s*$/i.test(topic) || /\/(cmd|schedule\/set)\s*$/i.test(topic);
   const isState = /\/relay\/[^/]+\/state$/.test(topic);
   const note = isCmd ? checkCommand(topic, text) : null;
   if (isState && !retained) resolveAwaiting(topic, text);   // retained = old value, not a reply
@@ -275,6 +286,7 @@ function ago(ts) {
 }
 
 function render() {
+  syncScheduleDevices();
   const wrap = $('devices');
   $('device-count').textContent = `${devices.size} บอร์ด`;
   wrap.replaceChildren();
@@ -306,6 +318,7 @@ function renderDevice(id, d) {
       el('span', {}, `Uptime ${t ? fmtUptime(t.uptime) : '—'}`),
       el('span', {}, `Heap ${t ? Math.round(t.heap / 1024) + ' KB' : '—'}`),
       el('span', {}, `FW ${d.info?.fw || '—'}`),
+      el('span', {}, `เวลาบอร์ด ${t?.time ? t.time.slice(11, 16) : '—'}`),
       el('span', {}, `Seen ${ago(d.seen)}`),
     ),
     el('div', { class: 'relays' }, relays.map(r => {
@@ -334,4 +347,167 @@ function renderDevice(id, d) {
       el('button', { class: 'btn small danger', onclick: () => forget(id) }, 'Forget'),
     ),
   );
+}
+
+// ---------- schedules (stored and executed on the board) ----------
+// Rule format shared with firmware: { ch, t: "HH:MM", a: "ON"|"OFF", d: weekday bitmask (bit0 = Sunday), en }
+const DAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+let schedId = '';
+let draft = [];
+let dirty = false;
+let saveTimer = null;
+
+function initSchedule() {
+  $('sched-device').addEventListener('change', e => {
+    if (dirty && !confirm('ยังไม่ได้บันทึกการแก้ไข — ทิ้งการแก้ไขแล้วเปลี่ยนบอร์ด?')) { e.target.value = schedId; return; }
+    selectScheduleDevice(e.target.value);
+  });
+  $('sched-add').addEventListener('click', () => {
+    const last = draft[draft.length - 1];
+    draft.push({ ch: last?.ch || 1, t: last ? last.t : '18:00', a: last?.a === 'ON' ? 'OFF' : 'ON', d: 127, en: true });
+    markDirty();
+    renderScheduleRows();
+  });
+  $('sched-save').addEventListener('click', saveSchedule);
+  $('sched-revert').addEventListener('click', () => selectScheduleDevice(schedId));
+}
+
+const scheduleSupported = d => !!d?.info?.tz;   // firmware >= 1.0.6 reports its timezone
+
+function syncScheduleDevices() {
+  const sel = $('sched-device');
+  const ids = [...devices.keys()].sort();
+  const current = [...sel.options].map(o => o.value).filter(Boolean);
+  if (ids.join() !== current.join()) {
+    sel.replaceChildren(...(ids.length
+      ? ids.map(id => el('option', { value: id }, id))
+      : [el('option', { value: '' }, '— ยังไม่พบบอร์ด —')]));
+    if (!ids.includes(schedId)) { dirty = false; schedId = ''; }
+    sel.value = schedId || ids[0] || '';
+    if (!schedId && ids[0]) selectScheduleDevice(ids[0]);
+  }
+  // info may arrive after the first schedule render (support check depends on it)
+  const d = devices.get(schedId);
+  if (d && !dirty && $('sched-rows').dataset.supported !== String(scheduleSupported(d))) renderScheduleRows();
+  updateScheduleButtons();
+}
+
+function selectScheduleDevice(id) {
+  schedId = id;
+  dirty = false;
+  draft = structuredClone(devices.get(id)?.schedule?.rules || []);
+  renderScheduleRows();
+  renderClock();
+}
+
+function onScheduleMessage(id, sch) {
+  if (id !== schedId) return;
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+    if (sch.error) {
+      toast(`บอร์ดไม่รับตารางเวลา: ${sch.error}`, 6000);
+      updateScheduleButtons();
+      return;
+    }
+    toast(`บันทึกตารางเวลาแล้ว (${sch.rules.length} รายการ) ✔`);
+    dirty = false;
+  }
+  if (sch.error) return;                  // someone else's rejected attempt
+  if (!dirty) {
+    draft = structuredClone(sch.rules || []);
+    renderScheduleRows();
+  }
+  renderClock();
+}
+
+function markDirty() {
+  dirty = true;
+  updateScheduleButtons();
+}
+
+function updateScheduleButtons() {
+  const d = devices.get(schedId);
+  const ok = !!client?.connected && scheduleSupported(d);
+  $('sched-add').disabled = !ok || draft.length >= 20;
+  $('sched-save').disabled = !ok || !dirty || !!saveTimer;
+  $('sched-revert').disabled = !dirty;
+  $('sched-status').replaceChildren(dirty ? el('span', { class: 'dirty-dot' }, '● ยังไม่ได้บันทึก') : '');
+}
+
+function renderClock() {
+  const d = devices.get(schedId);
+  const time = d?.telemetry?.time || d?.schedule?.time;
+  const tz = d?.schedule?.tz || d?.info?.tz;
+  $('sched-clock').textContent = !d || !scheduleSupported(d) ? ''
+    : time ? `เวลาบนบอร์ด ${time} (${tz})` : `บอร์ดยังไม่ได้ซิงก์เวลา (${tz || '—'})`;
+}
+
+function renderScheduleRows() {
+  const body = $('sched-rows');
+  const d = devices.get(schedId);
+  body.dataset.supported = String(scheduleSupported(d));
+  updateScheduleButtons();
+  const message = text => body.replaceChildren(el('tr', {}, el('td', { colspan: 6, class: 'sched-empty' }, text)));
+  if (!d) return message('เชื่อมต่อ broker และเลือกบอร์ด');
+  if (!scheduleSupported(d))
+    return message(`เฟิร์มแวร์บนบอร์ดนี้ (v${d.info?.fw || '?'}) ยังไม่รองรับการตั้งเวลา — ไปแท็บ “แฟลชเฟิร์มแวร์” แล้วกด “แฟลชเลย”`);
+  if (!draft.length) return message('ยังไม่มีตารางเวลา — กด “+ เพิ่มเวลา”');
+
+  const relays = d.info?.relays?.length ? d.info.relays : [{ ch: 1 }];
+  body.replaceChildren(...draft.map((r, i) => {
+    const update = patch => { Object.assign(draft[i], patch); markDirty(); };
+    const setDays = mask => { update({ d: mask }); renderScheduleRows(); };
+    const dayBtns = DAYS.map((label, bit) => el('button', {
+      type: 'button',
+      'aria-pressed': String(!!(r.d & (1 << bit))),
+      title: label,
+      onclick: () => {
+        const next = r.d ^ (1 << bit);
+        if (!next) return toast('ต้องเลือกอย่างน้อย 1 วัน');
+        setDays(next);
+      },
+    }, label));
+    const label = x => {
+      const n = names[`${schedId}/${x.ch}`];
+      return `CH${x.ch}${x.gpio != null ? ` · GPIO${x.gpio}` : ''}${n ? ` · ${n}` : ''}`;
+    };
+    const chSel = el('select', { onchange: e => update({ ch: Number(e.target.value) }) },
+      relays.map(x => el('option', { value: x.ch }, label(x))));
+    chSel.value = r.ch;
+    const actSel = el('select', { onchange: e => update({ a: e.target.value }) },
+      el('option', { value: 'ON' }, 'เปิด (ON)'), el('option', { value: 'OFF' }, 'ปิด (OFF)'));
+    actSel.value = r.a;
+    const en = el('input', { type: 'checkbox', 'aria-label': 'ใช้งาน', onchange: e => update({ en: e.target.checked }) });
+    en.checked = r.en !== false;
+    return el('tr', {},
+      el('td', {}, en),
+      el('td', {}, chSel),
+      el('td', {}, el('input', { type: 'time', value: r.t, required: true, onchange: e => update({ t: e.target.value }) })),
+      el('td', {}, actSel),
+      el('td', {}, el('div', { class: 'days' }, dayBtns),
+        el('div', { class: 'row', style: 'margin-top:4px;gap:4px' },
+          el('button', { type: 'button', class: 'copy', onclick: () => setDays(127) }, 'ทุกวัน'),
+          el('button', { type: 'button', class: 'copy', onclick: () => setDays(62) }, 'จ–ศ'),
+          el('button', { type: 'button', class: 'copy', onclick: () => setDays(65) }, 'ส–อา'))),
+      el('td', {}, el('button', {
+        type: 'button', class: 'btn small danger', title: 'ลบ',
+        onclick: () => { draft.splice(i, 1); markDirty(); renderScheduleRows(); },
+      }, '✕')),
+    );
+  }));
+}
+
+function saveSchedule() {
+  if (!client?.connected) return toast('ยังไม่ได้เชื่อมต่อ broker');
+  const bad = draft.findIndex(r => !/^\d{2}:\d{2}$/.test(r.t || ''));
+  if (bad >= 0) return toast(`แถวที่ ${bad + 1}: ใส่เวลาให้ครบ (HH:MM)`);
+  const rules = draft.map(r => ({ ch: r.ch, t: r.t, a: r.a, d: r.d, en: r.en !== false }));
+  client.publish(`${base}/${schedId}/schedule/set`, JSON.stringify(rules), { qos: 1 });
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    toast('บอร์ดไม่ตอบภายใน 5 วินาที — ตรวจว่าบอร์ดออนไลน์และใช้เฟิร์มแวร์ล่าสุด', 6000);
+    updateScheduleButtons();
+  }, 5000);
+  updateScheduleButtons();
 }
