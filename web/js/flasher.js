@@ -1,5 +1,5 @@
 // Browser flasher using esptool-js (ROM bootloader protocol over Web Serial).
-import { toast, setPill, appendLog, serialLock } from './util.js';
+import { toast, setPill, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint } from './util.js';
 
 const ESPTOOL_URL = 'https://unpkg.com/esptool-js@0.4.5/bundle.js';
 const LOCK = 'แฟลชเฟิร์มแวร์';
@@ -116,7 +116,7 @@ async function run(action) {
   let transport = null;
   try {
     let port;
-    try { port = await navigator.serial.requestPort(); }
+    try { port = await navigator.serial.requestPort({ filters: USB_SERIAL_FILTERS }); }
     catch { return; }   // user cancelled the picker (picker must open first, while the click still counts)
     if (action === 'latest') images = await fetchLatestImage();
 
@@ -172,10 +172,11 @@ async function run(action) {
     console.error(err);
     setPill($('flash-status'), 'Failed', 'err');
     log(`! ${err.message || err}`, 'err');
-    const hint = /open|busy|access/i.test(err.message || '')
-      ? 'พอร์ตถูกใช้งานอยู่ — ปิด Serial Monitor หรือแท็บอื่นก่อน'
+    const hint = /open/i.test(err.message || '') || err.name === 'NetworkError' || err.name === 'InvalidStateError'
+      ? portErrorHint(err)
       : 'ไม่สำเร็จ — ลองกดปุ่ม BOOT ค้างไว้ตอนเริ่มเชื่อมต่อ หรือลด baud rate';
-    toast(hint, 6000);
+    log(`! ${hint}`, 'err');
+    toast(hint, 9000);
   } finally {
     try { await transport?.disconnect(); } catch {}
     serialLock.release(LOCK);

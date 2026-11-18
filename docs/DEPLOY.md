@@ -78,6 +78,7 @@
 | อาการ | สาเหตุ / วิธีแก้ |
 |---|---|
 | แท็บ USB ขึ้นแถบเหลือง “ไม่รองรับ Web Serial” | ใช้ Chrome/Edge บนคอมพิวเตอร์ (Firefox/Safari/มือถือ ไม่รองรับ) |
+| `Failed to open serial port` | พอร์ตถูกโปรแกรมอื่นจับไว้ — ปิด **Serial Monitor ของ Arduino IDE** (หรือปิด IDE), PlatformIO monitor, PuTTY หรือแท็บเบราว์เซอร์อื่นที่เปิดเว็บนี้ แล้วถอด-เสียบ USB |
 | ไม่เห็นพอร์ต COM | สาย USB เป็นแบบชาร์จอย่างเดียว หรือยังไม่มีไดรเวอร์ CP210x/CH340 |
 | แฟลชค้างที่ “Connecting” | กดปุ่ม BOOT ค้างตอนเริ่ม หรือลด baud rate เป็น 115200 |
 | Serial log: `tls error ...` | ตรวจ host/port 8883 และว่าติ๊ก TLS; ถ้า broker ใช้ CA อื่นให้เพิ่มใน `ca_bundle.h` |

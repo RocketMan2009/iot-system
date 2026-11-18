@@ -1,5 +1,5 @@
 // USB provisioning over Web Serial. Protocol: docs/DESIGN.md §3.2 (newline-delimited JSON @115200)
-import { toast, setPill, el, appendLog, serialLock } from './util.js';
+import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint } from './util.js';
 
 const $ = id => document.getElementById(id);
 const LOCK = 'ตั้งค่าบอร์ด';
@@ -40,14 +40,18 @@ export function initProvision() {
 async function connect() {
   if (!serialLock.acquire(LOCK)) return;
   try {
-    port = await navigator.serial.requestPort();
+    port = await navigator.serial.requestPort({ filters: USB_SERIAL_FILTERS });
     await port.open({ baudRate: 115200, bufferSize: 8192 });
     // DTR=RTS=false => EN high, IO0 high on DevKitC auto-reset circuit (normal run mode)
     await port.setSignals({ dataTerminalReady: false, requestToSend: false });
   } catch (err) {
     serialLock.release(LOCK);
     port = null;
-    if (err.name !== 'NotFoundError') toast(`เปิดพอร์ตไม่ได้: ${err.message}`, 5000);
+    if (err.name !== 'NotFoundError') {
+      const hint = portErrorHint(err);
+      toast(`เปิดพอร์ตไม่ได้: ${hint}`, 9000);
+      appendLog($('prov-log'), `! ${err.message}\n! ${hint}`, 'err');
+    }
     return;
   }
   setPill($('prov-status'), 'Connected', 'on');
