@@ -27,6 +27,12 @@ export function initDashboard() {
   $('mon-clear').addEventListener('click', () => $('mon-log').replaceChildren());
   initSchedule();
   setInterval(() => devices.size && render(), 15000);   // refresh "last seen" texts
+
+  // Reconnect automatically with the saved settings, so the page is live right after a reload.
+  // A username without a remembered password can't connect: point the user at the password box.
+  renderScheduleRows();
+  if (saved.url && (saved.password || !saved.username)) connect(form);
+  else if (saved.url) setPill($('mqtt-status'), 'ใส่รหัสผ่านแล้วกดเชื่อมต่อ', 'busy');
 }
 
 function connect(form) {
@@ -64,12 +70,14 @@ function connect(form) {
     c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`], { qos: 1 });
     monitorFilter = null;
     subscribeMonitor($('mon-filter').value.trim() || '#');
-    updateScheduleButtons();
+    render();
+    // retained info arrives within a moment; if nothing came, say so instead of waiting silently
+    setTimeout(current(() => { if (!devices.size) render(); }), 3000);
   }));
   c.on('reconnect', current(() => setPill($('mqtt-status'), 'Reconnecting…', 'busy')));
   c.on('offline', current(() => setPill($('mqtt-status'), 'Offline', 'err')));
   c.on('error', current(err => { setPill($('mqtt-status'), 'Error', 'err'); toast(`MQTT: ${err.message}`, 5000); }));
-  c.on('close', current(() => setPill($('mqtt-status'), 'Disconnected', 'off')));
+  c.on('close', current(() => { setPill($('mqtt-status'), 'Disconnected', 'off'); render(); }));
   c.on('message', current(onMessage));
 }
 
@@ -479,7 +487,8 @@ function syncScheduleDevices() {
   }
   // info may arrive after the first render (the support check depends on it)
   const d = devices.get(schedId);
-  if (d && !dirty && $('sched-rows').dataset.supported !== String(scheduleSupported(d))) renderScheduleRows();
+  if (!d) renderScheduleRows();   // keep the "why no board" help current with the connection state
+  else if (!dirty && $('sched-rows').dataset.supported !== String(scheduleSupported(d))) renderScheduleRows();
   updateScheduleButtons();
 }
 
@@ -541,7 +550,7 @@ function renderScheduleRows() {
   list.dataset.supported = String(scheduleSupported(d));
   updateScheduleButtons();
   const message = text => list.replaceChildren(el('div', { class: 'sched-empty' }, text));
-  if (!d) return message('เชื่อมต่อ broker ด้านบน แล้วเลือกบอร์ด');
+  if (!d) return list.replaceChildren(noBoardHelp());
   if (!scheduleSupported(d))
     return message(`เฟิร์มแวร์บนบอร์ดนี้ (v${d.info?.fw || '?'}) ยังไม่รองรับการตั้งเวลา — ไปแท็บ “แฟลชเฟิร์มแวร์” แล้วกด “แฟลชเลย”`);
   if (!draft.length) return message('ยังไม่มีการตั้งเวลา — กด “+ เพิ่มช่วงเวลา” เพื่อเริ่ม');
@@ -604,6 +613,27 @@ function renderScheduleRows() {
     );
     return item;
   }));
+}
+
+// Explains exactly why no board is listed, with a jump to the broker settings.
+function noBoardHelp() {
+  const jump = el('button', {
+    type: 'button', class: 'btn small',
+    onclick: () => { $('mqtt-form').scrollIntoView({ behavior: 'smooth', block: 'start' }); $('mqtt-form').elements.password.focus(); },
+  }, '↑ ไปที่การตั้งค่า MQTT Broker');
+  let title, detail;
+  if (!client) {
+    title = 'ยังไม่ได้เชื่อมต่อ broker';
+    detail = 'กรอก WebSocket URL, Username, Password และ Base topic ในการ์ด “MQTT Broker” ด้านบน แล้วกด “เชื่อมต่อ” (ติ๊ก “จำรหัสผ่าน” เพื่อให้เชื่อมต่อเองครั้งหน้า)';
+  } else if (!client.connected) {
+    title = 'กำลังเชื่อมต่อ broker…';
+    detail = 'ถ้าค้างนาน หรือขึ้น Error ให้ตรวจ URL (wss://…:8884/mqtt) และ username / password';
+  } else {
+    title = `เชื่อมต่อแล้ว แต่ไม่พบบอร์ดใน “${base}/+/info”`;
+    detail = `ตรวจว่า Base topic ด้านบนตรงกับที่ตั้งในบอร์ดทุกตัวอักษร (ตัวพิมพ์ใหญ่-เล็กต่างกัน) — ดูค่าจริงได้ในแท็บ “ตั้งค่าบอร์ด (USB)” · ` +
+      'และบอร์ดต้องต่อ broker ตัวเดียวกันอย่างน้อยหนึ่งครั้ง';
+  }
+  return el('div', { class: 'sched-empty' }, el('b', {}, title), el('p', { class: 'small-note' }, detail), jump);
 }
 
 function saveSchedule() {
