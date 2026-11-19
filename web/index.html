@@ -66,25 +66,27 @@
           <h2>ตั้งเวลาเปิด-ปิดอัตโนมัติ</h2>
           <span id="sched-status" class="muted"></span>
         </div>
-        <p class="muted small-note">
-          ตารางเวลาถูกเก็บและทำงาน<b>บนบอร์ด ESP32</b> — ปิดเว็บหรือคอมก็ยังเปิด-ปิดตามเวลา
-          (บอร์ดใช้นาฬิกาจากอินเทอร์เน็ต NTP ตาม Timezone ที่ตั้งไว้ในแท็บตั้งค่าบอร์ด)
-        </p>
+        <ol class="sched-steps">
+          <li><b>1</b> เลือกบอร์ด</li>
+          <li><b>2</b> กด “+ เพิ่มช่วงเวลา”</li>
+          <li><b>3</b> เลือกช่องรีเลย์ ใส่เวลาเปิด / ปิด และวัน</li>
+          <li><b>4</b> กด “บันทึกลงบอร์ด”</li>
+        </ol>
         <div class="sched-head">
           <label class="row">บอร์ด <select id="sched-device"><option value="">— ยังไม่พบบอร์ด —</option></select></label>
           <span id="sched-clock" class="mono muted"></span>
         </div>
-        <div class="table-wrap">
-          <table class="pinmap sched-table">
-            <thead><tr><th>ใช้งาน</th><th>ช่องรีเลย์</th><th>เวลา</th><th>สั่ง</th><th>ทำงานวัน</th><th></th></tr></thead>
-            <tbody id="sched-rows"><tr><td colspan="6" class="sched-empty">เชื่อมต่อ broker และเลือกบอร์ด</td></tr></tbody>
-          </table>
-        </div>
-        <div class="actions">
-          <button id="sched-add" class="btn small" type="button" disabled>+ เพิ่มเวลา</button>
+        <div id="sched-rows" class="sched-list"><div class="sched-empty">เชื่อมต่อ broker ด้านบน แล้วเลือกบอร์ด</div></div>
+        <div class="actions sched-actions">
+          <button id="sched-add" class="btn" type="button" disabled>+ เพิ่มช่วงเวลา</button>
           <button id="sched-save" class="btn primary" type="button" disabled>บันทึกลงบอร์ด</button>
           <button id="sched-revert" class="btn small" type="button" disabled>ยกเลิกการแก้ไข</button>
         </div>
+        <p class="muted small-note">
+          ตารางเวลาเก็บและทำงาน<b>บนบอร์ด ESP32</b> — ปิดเว็บหรือปิดคอมก็ยังเปิด-ปิดตามเวลา ·
+          ช่องที่กด “ไม่ใช้” = ไม่สั่งตอนนั้น (เช่น เปิดอย่างเดียวแล้วปิดเองด้วยมือ) ·
+          ถ้าเวลาปิดน้อยกว่าเวลาเปิด จะปิดในวันถัดไป (เช่น เปิด 22:00 → ปิด 06:00)
+        </p>
       </div>
 
       <div class="card monitor">

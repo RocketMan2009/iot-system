@@ -209,7 +209,37 @@ label.check.small { font-size: .82rem; }
   color: var(--muted); font: 500 .78rem "IBM Plex Sans Thai", sans-serif; cursor: pointer; padding: 0;
 }
 .days button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-.sched-empty { color: var(--muted); padding: 14px 4px; }
+.sched-empty { color: var(--muted); padding: 18px; text-align: center; border: 1px dashed var(--border); border-radius: 10px; }
+.sched-steps { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 0; margin: 0 0 14px; font-size: .88rem; }
+.sched-steps b {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; margin-right: 6px; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink); font-size: .78rem;
+}
+.sched-list { display: flex; flex-direction: column; gap: 12px; }
+.sched-item { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); }
+.sched-item.disabled { opacity: .55; }
+.sched-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sched-top select { width: auto; flex: 1; min-width: 180px; }
+.sched-times { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; }
+.sched-times .arrow { color: var(--muted); padding-bottom: 8px; }
+.tfield { gap: 2px; }
+.tfield > span { font-weight: 600; font-size: .82rem; }
+.tfield.on > span { color: var(--on); }
+.tfield.off > span { color: var(--danger); }
+.tfield input[type="time"] { width: 130px; }
+.sched-days { display: flex; flex-direction: column; gap: 4px; }
+.sched-days > .muted { font-size: .82rem; }
+.presets { gap: 2px; }
+.sched-sentence { margin: 8px 0 0; font-size: .9rem; }
+.sched-actions { margin-top: 12px; }
+/* 24 h bar */
+.tbar { position: relative; height: 14px; margin: 18px 0 2px; border-radius: 7px; background: color-mix(in srgb, var(--muted) 18%, transparent); }
+.tbar i { position: absolute; top: 0; bottom: 0; background: var(--on); border-radius: 7px; opacity: .85; }
+.tbar .tick { position: absolute; top: -16px; transform: translateX(-50%); font: 10px "IBM Plex Mono", monospace; color: var(--muted); }
+.tbar .tick:first-child { transform: none; }
+.tbar .mark { position: absolute; top: -3px; width: 3px; height: 20px; border-radius: 2px; transform: translateX(-50%); }
+.tbar .mark.on { background: var(--on); }
+.tbar .mark.off { background: var(--danger); }
 .dirty-dot { color: #d97706; font-weight: 600; }
 
 /* overview */

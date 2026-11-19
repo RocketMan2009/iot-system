@@ -350,12 +350,101 @@ function renderDevice(id, d) {
 }
 
 // ---------- schedules (stored and executed on the board) ----------
-// Rule format shared with firmware: { ch, t: "HH:MM", a: "ON"|"OFF", d: weekday bitmask (bit0 = Sunday), en }
+// The board stores single actions: { ch, t: "HH:MM", a: "ON"|"OFF", d: weekday bitmask (bit0 = Sunday), en }.
+// The editor shows *periods* instead — "turn CH1 on at 18:30 and off at 23:00 on these days" — and
+// converts each period into (up to) two board rules. Overnight periods (off <= on) put the OFF rule
+// on the following day, so "Mon 22:00 -> 06:00" switches off on Tuesday morning.
 const DAYS = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
+const DAY_PRESETS = [[127, 'ทุกวัน'], [62, 'จ–ศ'], [65, 'ส–อา']];
+const MAX_RULES = 20;
 let schedId = '';
-let draft = [];
+let draft = [];          // periods: { ch, on: "HH:MM"|"", off: "HH:MM"|"", d, en }
 let dirty = false;
 let saveTimer = null;
+
+const nextDay = d => ((d << 1) | (d >> 6)) & 127;          // shift weekday mask by +1 day
+const toMin = t => (t ? Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5)) : null);
+const overnight = p => p.on && p.off && toMin(p.off) <= toMin(p.on);
+
+function periodsToRules(periods) {
+  const rules = [];
+  for (const p of periods) {
+    const en = p.en !== false;
+    if (p.on) rules.push({ ch: p.ch, t: p.on, a: 'ON', d: p.d, en });
+    if (p.off) rules.push({ ch: p.ch, t: p.off, a: 'OFF', d: overnight(p) ? nextDay(p.d) : p.d, en });
+  }
+  return rules;
+}
+
+// Pair each ON rule with the OFF rule that ends the same period; anything left stays a one-sided period.
+function rulesToPeriods(rules) {
+  const used = new Set();
+  const periods = [];
+  rules.forEach((r, i) => {
+    if (r.a !== 'ON') return;
+    const on = toMin(r.t);
+    let best = -1, bestGap = Infinity;
+    rules.forEach((o, j) => {
+      if (used.has(j) || o.a !== 'OFF' || o.ch !== r.ch || (o.en !== false) !== (r.en !== false)) return;
+      const off = toMin(o.t);
+      const sameDay = off > on && o.d === r.d;
+      const nextDayOff = off <= on && o.d === nextDay(r.d);
+      if (!sameDay && !nextDayOff) return;
+      const gap = (off - on + 1440) % 1440 || 1440;
+      if (gap < bestGap) { best = j; bestGap = gap; }
+    });
+    used.add(i);
+    if (best >= 0) used.add(best);
+    periods.push({ ch: r.ch, on: r.t, off: best >= 0 ? rules[best].t : '', d: r.d, en: r.en !== false });
+  });
+  rules.forEach((r, i) => {
+    if (!used.has(i)) periods.push({ ch: r.ch, on: '', off: r.t, d: r.d, en: r.en !== false });
+  });
+  return periods.sort((a, b) => a.ch - b.ch || toMin(a.on || a.off) - toMin(b.on || b.off));
+}
+
+function daysText(d) {
+  const preset = DAY_PRESETS.find(([m]) => m === d);
+  if (preset) return preset[1];
+  return DAYS.filter((_, i) => d & (1 << i)).join(', ');
+}
+
+function durationText(p) {
+  const mins = (toMin(p.off) - toMin(p.on) + 1440) % 1440 || 1440;
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return `${h ? `${h} ชม.` : ''}${h && m ? ' ' : ''}${m ? `${m} นาที` : ''}`;
+}
+
+function chLabel(ch) {
+  const n = names[`${schedId}/${ch}`];
+  const gpio = devices.get(schedId)?.info?.relays?.find(r => r.ch === ch)?.gpio;
+  return `CH${ch}${n ? ` “${n}”` : ''}${gpio != null ? ` (GPIO${gpio})` : ''}`;
+}
+
+function sentence(p) {
+  const who = chLabel(p.ch);
+  if (!p.on && !p.off) return 'ใส่เวลาเปิด หรือเวลาปิด อย่างน้อย 1 ช่อง';
+  const when = daysText(p.d);
+  if (p.on && p.off)
+    return `${when}: เปิด ${who} เวลา ${p.on} แล้วปิดเวลา ${p.off}${overnight(p) ? ' ของวันถัดไป' : ''} — เปิดนาน ${durationText(p)}`;
+  return p.on ? `${when}: เปิด ${who} เวลา ${p.on} (ไม่ปิดอัตโนมัติ)` : `${when}: ปิด ${who} เวลา ${p.off}`;
+}
+
+// 24-hour bar showing when the relay is on (two segments for overnight periods).
+function timeBar(p) {
+  const bar = el('div', { class: 'tbar', 'aria-hidden': 'true' },
+    ...[0, 6, 12, 18].map(h => el('span', { class: 'tick', style: `left:${(h / 24) * 100}%` }, String(h).padStart(2, '0'))));
+  const seg = (a, b) => bar.append(el('i', { style: `left:${(a / 1440) * 100}%;width:${((b - a) / 1440) * 100}%` }));
+  const on = toMin(p.on), off = toMin(p.off);
+  if (on != null && off != null) {
+    if (off > on) seg(on, off); else { seg(on, 1440); seg(0, off); }
+  } else if (on != null) {
+    seg(on, 1440);
+  }
+  if (on != null) bar.append(el('b', { class: 'mark on', style: `left:${(on / 1440) * 100}%`, title: `เปิด ${p.on}` }));
+  if (off != null) bar.append(el('b', { class: 'mark off', style: `left:${(off / 1440) * 100}%`, title: `ปิด ${p.off}` }));
+  return bar;
+}
 
 function initSchedule() {
   $('sched-device').addEventListener('change', e => {
@@ -364,12 +453,14 @@ function initSchedule() {
   });
   $('sched-add').addEventListener('click', () => {
     const last = draft[draft.length - 1];
-    draft.push({ ch: last?.ch || 1, t: last ? last.t : '18:00', a: last?.a === 'ON' ? 'OFF' : 'ON', d: 127, en: true });
+    draft.push({ ch: last ? Math.min(last.ch + 1, devices.get(schedId)?.info?.relays?.length || 1) : 1, on: '18:00', off: '22:00', d: 127, en: true });
     markDirty();
     renderScheduleRows();
+    $('sched-rows').lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   });
   $('sched-save').addEventListener('click', saveSchedule);
   $('sched-revert').addEventListener('click', () => selectScheduleDevice(schedId));
+  window.addEventListener('beforeunload', e => { if (dirty) e.preventDefault(); });
 }
 
 const scheduleSupported = d => !!d?.info?.tz;   // firmware >= 1.0.6 reports its timezone
@@ -386,7 +477,7 @@ function syncScheduleDevices() {
     sel.value = schedId || ids[0] || '';
     if (!schedId && ids[0]) selectScheduleDevice(ids[0]);
   }
-  // info may arrive after the first schedule render (support check depends on it)
+  // info may arrive after the first render (the support check depends on it)
   const d = devices.get(schedId);
   if (d && !dirty && $('sched-rows').dataset.supported !== String(scheduleSupported(d))) renderScheduleRows();
   updateScheduleButtons();
@@ -395,7 +486,7 @@ function syncScheduleDevices() {
 function selectScheduleDevice(id) {
   schedId = id;
   dirty = false;
-  draft = structuredClone(devices.get(id)?.schedule?.rules || []);
+  draft = rulesToPeriods(devices.get(id)?.schedule?.rules || []);
   renderScheduleRows();
   renderClock();
 }
@@ -410,12 +501,12 @@ function onScheduleMessage(id, sch) {
       updateScheduleButtons();
       return;
     }
-    toast(`บันทึกตารางเวลาแล้ว (${sch.rules.length} รายการ) ✔`);
+    toast('บันทึกตารางเวลาลงบอร์ดแล้ว ✔');
     dirty = false;
   }
   if (sch.error) return;                  // someone else's rejected attempt
   if (!dirty) {
-    draft = structuredClone(sch.rules || []);
+    draft = rulesToPeriods(sch.rules || []);
     renderScheduleRows();
   }
   renderClock();
@@ -429,10 +520,11 @@ function markDirty() {
 function updateScheduleButtons() {
   const d = devices.get(schedId);
   const ok = !!client?.connected && scheduleSupported(d);
-  $('sched-add').disabled = !ok || draft.length >= 20;
+  const ruleCount = periodsToRules(draft).length;
+  $('sched-add').disabled = !ok || ruleCount > MAX_RULES - 2;
   $('sched-save').disabled = !ok || !dirty || !!saveTimer;
   $('sched-revert').disabled = !dirty;
-  $('sched-status').replaceChildren(dirty ? el('span', { class: 'dirty-dot' }, '● ยังไม่ได้บันทึก') : '');
+  $('sched-status').replaceChildren(dirty ? el('span', { class: 'dirty-dot' }, '● ยังไม่ได้บันทึก — กด “บันทึกลงบอร์ด”') : '');
 }
 
 function renderClock() {
@@ -440,69 +532,86 @@ function renderClock() {
   const time = d?.telemetry?.time || d?.schedule?.time;
   const tz = d?.schedule?.tz || d?.info?.tz;
   $('sched-clock').textContent = !d || !scheduleSupported(d) ? ''
-    : time ? `เวลาบนบอร์ด ${time} (${tz})` : `บอร์ดยังไม่ได้ซิงก์เวลา (${tz || '—'})`;
+    : time ? `🕒 เวลาบนบอร์ด ${time.slice(11, 16)} (${tz})` : `บอร์ดยังไม่ได้ซิงก์เวลา (${tz || '—'})`;
 }
 
 function renderScheduleRows() {
-  const body = $('sched-rows');
+  const list = $('sched-rows');
   const d = devices.get(schedId);
-  body.dataset.supported = String(scheduleSupported(d));
+  list.dataset.supported = String(scheduleSupported(d));
   updateScheduleButtons();
-  const message = text => body.replaceChildren(el('tr', {}, el('td', { colspan: 6, class: 'sched-empty' }, text)));
-  if (!d) return message('เชื่อมต่อ broker และเลือกบอร์ด');
+  const message = text => list.replaceChildren(el('div', { class: 'sched-empty' }, text));
+  if (!d) return message('เชื่อมต่อ broker ด้านบน แล้วเลือกบอร์ด');
   if (!scheduleSupported(d))
     return message(`เฟิร์มแวร์บนบอร์ดนี้ (v${d.info?.fw || '?'}) ยังไม่รองรับการตั้งเวลา — ไปแท็บ “แฟลชเฟิร์มแวร์” แล้วกด “แฟลชเลย”`);
-  if (!draft.length) return message('ยังไม่มีตารางเวลา — กด “+ เพิ่มเวลา”');
+  if (!draft.length) return message('ยังไม่มีการตั้งเวลา — กด “+ เพิ่มช่วงเวลา” เพื่อเริ่ม');
 
   const relays = d.info?.relays?.length ? d.info.relays : [{ ch: 1 }];
-  body.replaceChildren(...draft.map((r, i) => {
-    const update = patch => { Object.assign(draft[i], patch); markDirty(); };
-    const setDays = mask => { update({ d: mask }); renderScheduleRows(); };
-    const dayBtns = DAYS.map((label, bit) => el('button', {
-      type: 'button',
-      'aria-pressed': String(!!(r.d & (1 << bit))),
-      title: label,
-      onclick: () => {
-        const next = r.d ^ (1 << bit);
-        if (!next) return toast('ต้องเลือกอย่างน้อย 1 วัน');
-        setDays(next);
-      },
-    }, label));
-    const label = x => {
-      const n = names[`${schedId}/${x.ch}`];
-      return `CH${x.ch}${x.gpio != null ? ` · GPIO${x.gpio}` : ''}${n ? ` · ${n}` : ''}`;
+  list.replaceChildren(...draft.map((p, i) => {
+    const text = el('p', { class: 'sched-sentence' }, sentence(p));
+    const barWrap = el('div', {}, timeBar(p));
+    const refresh = () => { text.textContent = sentence(p); barWrap.replaceChildren(timeBar(p)); };
+    const update = patch => { Object.assign(p, patch); markDirty(); refresh(); };
+
+    const chSel = el('select', { 'aria-label': 'ช่องรีเลย์', onchange: e => update({ ch: Number(e.target.value) }) },
+      relays.map(x => el('option', { value: x.ch }, chLabel(x.ch))));
+    chSel.value = p.ch;
+
+    const timeField = (key, label, cls) => {
+      const input = el('input', { type: 'time', value: p[key], 'aria-label': label, onchange: e => update({ [key]: e.target.value }) });
+      const clear = el('button', {
+        type: 'button', class: 'copy', title: `ไม่ใช้เวลา${label}`,
+        onclick: () => { input.value = ''; update({ [key]: '' }); },
+      }, 'ไม่ใช้');
+      return el('label', { class: `tfield ${cls}` }, el('span', {}, label), el('div', { class: 'row' }, input, clear));
     };
-    const chSel = el('select', { onchange: e => update({ ch: Number(e.target.value) }) },
-      relays.map(x => el('option', { value: x.ch }, label(x))));
-    chSel.value = r.ch;
-    const actSel = el('select', { onchange: e => update({ a: e.target.value }) },
-      el('option', { value: 'ON' }, 'เปิด (ON)'), el('option', { value: 'OFF' }, 'ปิด (OFF)'));
-    actSel.value = r.a;
-    const en = el('input', { type: 'checkbox', 'aria-label': 'ใช้งาน', onchange: e => update({ en: e.target.checked }) });
-    en.checked = r.en !== false;
-    return el('tr', {},
-      el('td', {}, en),
-      el('td', {}, chSel),
-      el('td', {}, el('input', { type: 'time', value: r.t, required: true, onchange: e => update({ t: e.target.value }) })),
-      el('td', {}, actSel),
-      el('td', {}, el('div', { class: 'days' }, dayBtns),
-        el('div', { class: 'row', style: 'margin-top:4px;gap:4px' },
-          el('button', { type: 'button', class: 'copy', onclick: () => setDays(127) }, 'ทุกวัน'),
-          el('button', { type: 'button', class: 'copy', onclick: () => setDays(62) }, 'จ–ศ'),
-          el('button', { type: 'button', class: 'copy', onclick: () => setDays(65) }, 'ส–อา'))),
-      el('td', {}, el('button', {
-        type: 'button', class: 'btn small danger', title: 'ลบ',
-        onclick: () => { draft.splice(i, 1); markDirty(); renderScheduleRows(); },
-      }, '✕')),
+
+    const dayBtns = el('div', { class: 'days' }, DAYS.map((label, bit) => el('button', {
+      type: 'button', 'aria-pressed': String(!!(p.d & (1 << bit))), title: label,
+      onclick: e => {
+        const next = p.d ^ (1 << bit);
+        if (!next) return toast('ต้องเลือกอย่างน้อย 1 วัน');
+        update({ d: next });
+        e.currentTarget.setAttribute('aria-pressed', String(!!(next & (1 << bit))));
+      },
+    }, label)));
+    const presets = el('div', { class: 'row presets' }, DAY_PRESETS.map(([mask, label]) => el('button', {
+      type: 'button', class: 'copy',
+      onclick: () => {
+        update({ d: mask });
+        [...dayBtns.children].forEach((b, bit) => b.setAttribute('aria-pressed', String(!!(mask & (1 << bit)))));
+      },
+    }, label)));
+
+    const en = el('input', { type: 'checkbox', onchange: e => { update({ en: e.target.checked }); item.classList.toggle('disabled', !e.target.checked); } });
+    en.checked = p.en !== false;
+
+    const item = el('div', { class: `sched-item${p.en === false ? ' disabled' : ''}` },
+      el('div', { class: 'sched-top' },
+        el('label', { class: 'check' }, en, 'ใช้งาน'),
+        chSel,
+        el('button', {
+          type: 'button', class: 'btn small danger', title: 'ลบช่วงเวลานี้',
+          onclick: () => { draft.splice(i, 1); markDirty(); renderScheduleRows(); },
+        }, '✕ ลบ')),
+      el('div', { class: 'sched-times' },
+        timeField('on', 'เปิด', 'on'),
+        el('span', { class: 'arrow' }, '→'),
+        timeField('off', 'ปิด', 'off'),
+        el('div', { class: 'sched-days' }, el('span', { class: 'muted' }, 'วัน'), dayBtns, presets)),
+      barWrap,
+      text,
     );
+    return item;
   }));
 }
 
 function saveSchedule() {
   if (!client?.connected) return toast('ยังไม่ได้เชื่อมต่อ broker');
-  const bad = draft.findIndex(r => !/^\d{2}:\d{2}$/.test(r.t || ''));
-  if (bad >= 0) return toast(`แถวที่ ${bad + 1}: ใส่เวลาให้ครบ (HH:MM)`);
-  const rules = draft.map(r => ({ ch: r.ch, t: r.t, a: r.a, d: r.d, en: r.en !== false }));
+  const empty = draft.findIndex(p => !p.on && !p.off);
+  if (empty >= 0) return toast(`ช่วงเวลาที่ ${empty + 1}: ใส่เวลาเปิด หรือเวลาปิด อย่างน้อย 1 ช่อง`);
+  const rules = periodsToRules(draft);
+  if (rules.length > MAX_RULES) return toast(`ตั้งได้สูงสุด ${MAX_RULES} คำสั่ง (ตอนนี้ ${rules.length})`);
   client.publish(`${base}/${schedId}/schedule/set`, JSON.stringify(rules), { qos: 1 });
   saveTimer = setTimeout(() => {
     saveTimer = null;
