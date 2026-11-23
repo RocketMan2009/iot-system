@@ -1,5 +1,5 @@
 // USB provisioning over Web Serial. Protocol: docs/DESIGN.md §3.2 (newline-delimited JSON @115200)
-import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint } from './util.js';
+import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint, store } from './util.js';
 import { createPinPicker, headerPosition, DEFAULT_PINS } from './pin-picker.js';
 import { getPins, setPins, onPins } from './pins-state.js';
 import { renderWiring } from './wiring.js';
@@ -32,7 +32,9 @@ export function initProvision() {
   pf.mqtt_port.addEventListener('change', () => {
     if (pf.mqtt_port.value === '8883') pf.mqtt_tls.checked = true;
     if (pf.mqtt_port.value === '1883') pf.mqtt_tls.checked = false;
+    syncPresetToHost();
   });
+  initHostPresets();
   $('prov-send').addEventListener('submit', e => {
     e.preventDefault();
     const line = e.target.elements.line.value.trim();
@@ -222,6 +224,7 @@ function showInfo(info) {
   f.active_low.checked = !!info.active_low;
   f.restore_state.checked = info.restore_state !== false;
   $('prov-fields').disabled = false;
+  buildHostPresets();
 
   renderPinMap(info);
   syncPicker(info);
@@ -345,6 +348,7 @@ async function saveConfig() {
   try {
     const res = await request(payload, 3000, shown);
     if (!res.ok) throw new Error(res.error || 'board rejected config');
+    if (payload.mqtt_host) rememberBroker({ host: payload.mqtt_host, port: payload.mqtt_port, tls: payload.mqtt_tls });
     toast('บันทึกแล้ว — บอร์ดกำลังรีบูต…');
     await sleep(4000);
     await refreshInfo(4);
@@ -426,3 +430,103 @@ async function resetBoard() {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- MQTT host dropdown ----------
+// One pick fills Host + Port + TLS. Sources: the broker the dashboard uses, the board's current
+// broker, brokers saved recently from this browser, and a few public test brokers.
+const RECENT_KEY = 'hub.recentBrokers';
+const PUBLIC_NOTE = 'broker สาธารณะ: ใครก็อ่าน/สั่ง topic ได้ — ตั้ง Base topic ให้ไม่ซ้ำใคร และใช้ทดสอบเท่านั้น';
+const PUBLIC_BROKERS = [
+  { host: 'broker.hivemq.com', port: 1883, tls: false, label: 'HiveMQ Public — broker.hivemq.com' },
+  { host: 'broker.emqx.io', port: 1883, tls: false, label: 'EMQX Public — broker.emqx.io' },
+  { host: 'test.mosquitto.org', port: 1883, tls: false, label: 'Mosquitto Test — test.mosquitto.org' },
+];
+let presetOptions = [];
+
+const isLocalHost = h => /^(localhost|127\.|0\.0\.0\.0$|::1$)/i.test(h);
+
+// The dashboard talks WebSocket (8884 / 9001); the board talks plain MQTT on the same host.
+function dashboardBroker() {
+  const url = store('hub.mqtt')?.url;
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const tls = u.protocol === 'wss:';
+    return {
+      host: u.hostname, port: tls ? 8883 : 1883, tls,
+      label: `ใช้ร่วมกับแดชบอร์ด — ${u.hostname}`,
+      note: tls ? 'บอร์ดใช้ MQTT over TLS พอร์ต 8883 (แดชบอร์ดใช้ WSS พอร์ต 8884 — broker เดียวกัน)'
+                : 'บอร์ดใช้ MQTT พอร์ต 1883 (แดชบอร์ดใช้ WebSocket — broker เดียวกัน)',
+    };
+  } catch { return null; }
+}
+
+function rememberBroker(b) {
+  const list = (store(RECENT_KEY) || []).filter(x => !(x.host === b.host && x.port === b.port));
+  store(RECENT_KEY, [b, ...list].slice(0, 5));
+}
+
+function initHostPresets() {
+  $('mqtt-preset').addEventListener('change', e => {
+    const v = e.target.value;
+    const f = $('prov-form').elements;
+    if (v === 'custom') { f.mqtt_host.focus(); f.mqtt_host.select(); return syncPresetToHost(); }
+    const o = presetOptions[Number(v)];
+    if (!o) return;
+    f.mqtt_host.value = o.host;
+    f.mqtt_port.value = o.port;
+    f.mqtt_tls.checked = !!o.tls;
+    syncPresetToHost();
+    if (o.public) f.base.focus();          // public broker: pick a unique base topic next
+  });
+  $('prov-form').elements.mqtt_host.addEventListener('input', syncPresetToHost);
+  // dashboard settings may change while the page is open
+  document.querySelector('[data-tab="provision"]')?.addEventListener('click', buildHostPresets);
+  buildHostPresets();
+}
+
+function buildHostPresets() {
+  presetOptions = [];
+  const add = (group, b) => {
+    if (!b?.host || presetOptions.some(o => o.host === b.host && o.port === b.port)) return;
+    presetOptions.push({ ...b, group });
+  };
+  add('แนะนำ', dashboardBroker());
+  if (lastInfo?.mqtt_host)
+    add('แนะนำ', { host: lastInfo.mqtt_host, port: lastInfo.mqtt_port || 1883, tls: !!lastInfo.mqtt_tls,
+      label: `ค่าปัจจุบันในบอร์ด — ${lastInfo.mqtt_host}:${lastInfo.mqtt_port}`, note: 'ค่าที่บันทึกอยู่ในบอร์ดตอนนี้' });
+  for (const b of store(RECENT_KEY) || [])
+    add('ใช้ล่าสุด', { ...b, label: `${b.host} : ${b.port}${b.tls ? ' (TLS)' : ''}` });
+  for (const b of PUBLIC_BROKERS) add('Broker สาธารณะ (ทดสอบเท่านั้น)', { ...b, public: true, note: PUBLIC_NOTE });
+
+  const groups = new Map();
+  presetOptions.forEach((o, i) => {
+    if (!groups.has(o.group)) groups.set(o.group, []);
+    groups.get(o.group).push(el('option', { value: String(i) }, o.label));
+  });
+  $('mqtt-preset').replaceChildren(
+    el('option', { value: '' }, '— เลือก broker —'),
+    ...[...groups].map(([label, opts]) => el('optgroup', { label }, opts)),
+    el('option', { value: 'custom' }, '✎ กรอกเอง'),
+  );
+  $('mqtt-host-list').replaceChildren(...[...new Set(presetOptions.map(o => o.host))].map(h => el('option', { value: h })));
+  syncPresetToHost();
+}
+
+// Keep the dropdown and the hint in step with whatever is typed in Host / Port.
+function syncPresetToHost() {
+  const f = $('prov-form').elements;
+  const host = f.mqtt_host.value.trim();
+  const port = Number(f.mqtt_port.value) || 1883;
+  const idx = presetOptions.findIndex(o => o.host === host && Number(o.port) === port);
+  $('mqtt-preset').value = idx >= 0 ? String(idx) : host ? 'custom' : '';
+  const note = $('mqtt-preset-note');
+  if (isLocalHost(host)) {
+    note.textContent = '⚠ บอร์ดเชื่อมต่อ “localhost” ไม่ได้ — ใส่ IP ของเครื่องที่รัน broker เช่น 192.168.1.10';
+    note.className = 'field-note warn';
+  } else {
+    const o = presetOptions[idx];
+    note.textContent = o?.note || (host ? 'กรอกเอง — ตรวจ Port และช่อง TLS ให้ตรงกับ broker' : 'เลือกจากรายการ หรือพิมพ์ชื่อโฮสต์ / IP ของ broker');
+    note.className = `field-note${o?.public ? ' warn' : ''}`;
+  }
+}

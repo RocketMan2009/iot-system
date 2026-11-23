@@ -383,6 +383,13 @@ a.btn { text-decoration: none; display: inline-block; }
   .file-row > .muted { display: none; }
 }
 
+/* MQTT host picker (USB tab) */
+.host-row select { flex: 0 1 230px; width: auto; min-width: 150px; }
+.host-row input { flex: 1 1 200px; }
+.field-note { font-size: .78rem; color: var(--muted); min-height: 1em; }
+.field-note.warn { color: var(--danger); }
+@media (max-width: 560px) { .host-row { flex-wrap: wrap; } .host-row select { flex-basis: 100%; } }
+
 /* brand wordmark in the header */
 .brand h1 { font-size: 1.35rem; letter-spacing: -.3px; }
 .brand h1 .b-plug { color: var(--brand-navy); }
