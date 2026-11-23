@@ -74,7 +74,8 @@ function connect(form) {
 
   setPill($('mqtt-status'), 'Connecting…', 'busy');
   notify('connecting');
-  conn = { url: f.url, username: f.username, attempts: 0, error: '', authFailed: false };
+  conn = { url: f.url, username: f.username, attempts: 0, error: '', authFailed: false, connectedAt: 0 };
+  otherBases.clear();
   const c = mqtt.connect(f.url, {
     username: f.username || undefined,
     password: f.password || undefined,
@@ -98,6 +99,7 @@ function connect(form) {
     subscribeMonitor($('mon-filter').value.trim() || '#');
     render();
     // retained info arrives within a moment; if nothing came, say so instead of waiting silently
+    conn.connectedAt = Date.now();
     setTimeout(current(() => { if (!devices.size) render(); }), 3000);
   }));
   c.on('reconnect', current(() => {
@@ -129,7 +131,38 @@ function connect(form) {
 }
 
 // ---------- connection diagnostics ----------
-let conn = { url: '', username: '', attempts: 0, error: '', authFailed: false };
+let conn = { url: '', username: '', attempts: 0, error: '', authFailed: false, connectedAt: 0 };
+const otherBases = new Map();   // base topic -> Set(device ids) seen on this broker but not under our base
+
+/** Help shown while connected but no board is listed under our Base topic. */
+function boardSearchHelp() {
+  const switchTo = b => {
+    const form = $('mqtt-form');
+    form.elements.base.value = b;
+    toast(`เปลี่ยน Base topic เป็น “${b}” แล้ว — กำลังเชื่อมต่อใหม่`);
+    connect(form);
+  };
+  if (otherBases.size) {
+    return el('div', { class: 'diag found' },
+      el('b', {}, `พบบอร์ดแล้ว แต่ใช้ Base topic คนละชื่อกับที่ตั้งไว้ (“${base}”)`),
+      el('p', { class: 'small-note' }, 'ตัวพิมพ์ใหญ่-เล็กต้องตรงกันทุกตัวอักษร — กดปุ่มเพื่อใช้ชื่อเดียวกับบอร์ด:'),
+      el('div', { class: 'actions' }, [...otherBases].map(([b, ids]) => el('button', {
+        type: 'button', class: 'btn primary', onclick: () => switchTo(b),
+      }, `ใช้ “${b}”  (${[...ids].join(', ')})`))));
+  }
+  if (Date.now() - conn.connectedAt < 3000) return el('div', { class: 'muted' }, 'กำลังค้นหาบอร์ด…');
+  let host = '';
+  try { host = new URL(conn.url).hostname; } catch {}
+  return el('div', { class: 'diag' },
+    el('b', {}, 'ยังไม่มีบอร์ดเชื่อมต่อ broker นี้'),
+    el('p', { class: 'small-note' }, 'หน้าเว็บเชื่อมต่อแล้ว แต่ยังไม่มีบอร์ดตัวไหนส่งข้อมูลมาที่ broker นี้เลย (ไม่ว่าจะ Base topic ไหน) — ให้ตั้งค่าบอร์ดใหม่:'),
+    el('ul', { class: 'diag-list' },
+      el('li', {}, 'แท็บ “ตั้งค่าบอร์ด (USB)” → MQTT Host = ', el('code', {}, host || '(ชื่อ cluster)'), ' · Port = ', el('code', {}, '8883'), ' · ติ๊ก TLS'),
+      el('li', {}, 'MQTT Username / Password = บัญชีของบอร์ดใน HiveMQ → Access Management (คนละบัญชีกับหน้าเว็บได้)'),
+      el('li', {}, 'Base topic ของบอร์ด = ', el('code', {}, base), ' ให้ตรงกับหน้าเว็บ แล้วกด “บันทึกลงบอร์ด & รีบูต”'),
+      el('li', {}, 'หลังบันทึก ดูในช่อง MQTT ของแท็บ USB ว่าขึ้น “connected”')),
+  );
+}
 
 /** Things in the settings that are certainly wrong, in plain Thai. */
 function settingProblems({ url, username }) {
@@ -185,6 +218,14 @@ function onMessage(topic, payload, packet) {
   logMonitor(topic, text, packet?.retain);
 
   // Everything below is device discovery/state, which only looks at our own base topic.
+  // A board announcing itself under another Base topic (seen through the monitor's "#"):
+  // remember it so the help box can offer a one-click switch.
+  const other = topic.match(/^(.+)\/([^/]+)\/(info|status)$/);
+  if (other && other[1] !== base && text) {
+    if (!otherBases.has(other[1])) otherBases.set(other[1], new Set());
+    if (!otherBases.get(other[1]).has(other[2])) { otherBases.get(other[1]).add(other[2]); render(); }
+  }
+
   if (!topic.startsWith(`${base}/`)) return;
   const rest = topic.slice(base.length + 1).split('/');   // [id, kind, ...]
   const [id, kind] = rest;
@@ -389,7 +430,7 @@ function render() {
   wrap.replaceChildren();
   if (!devices.size) {
     wrap.append(el('div', { class: 'empty' }, client?.connected
-      ? `ยังไม่พบบอร์ดใน "${base}/+/info" — ตรวจว่าบอร์ดตั้งค่า broker และ base topic ตรงกัน`
+      ? boardSearchHelp()
       : 'เชื่อมต่อ broker เพื่อค้นหาบอร์ดอัตโนมัติ'));
     return;
   }
@@ -720,9 +761,7 @@ function noBoardHelp() {
     title = 'กำลังเชื่อมต่อ broker…';
     detail = 'รอสักครู่…';
   } else {
-    title = `เชื่อมต่อแล้ว แต่ไม่พบบอร์ดใน “${base}/+/info”`;
-    detail = `ตรวจว่า Base topic ด้านบนตรงกับที่ตั้งในบอร์ดทุกตัวอักษร (ตัวพิมพ์ใหญ่-เล็กต่างกัน) — ดูค่าจริงได้ในแท็บ “ตั้งค่าบอร์ด (USB)” · ` +
-      'และบอร์ดต้องต่อ broker ตัวเดียวกันอย่างน้อยหนึ่งครั้ง';
+    return el('div', { class: 'sched-empty' }, boardSearchHelp());
   }
   return el('div', { class: 'sched-empty' }, el('b', {}, title), el('p', { class: 'small-note' }, detail), jump);
 }
