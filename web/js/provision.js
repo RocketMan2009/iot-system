@@ -44,10 +44,14 @@ export function initProvision() {
 }
 
 // ---------- port lifecycle ----------
-async function connect() {
-  if (!serialLock.acquire(LOCK)) return;
+// opts.reuse: use a port this site was already allowed to open (no picker) — the wizard
+// uses it right after flashing. A click event passed by the button is ignored.
+async function connect(opts) {
+  if (port) return true;
+  if (!serialLock.acquire(LOCK)) return false;
   try {
-    port = await navigator.serial.requestPort({ filters: USB_SERIAL_FILTERS });
+    const granted = opts?.reuse === true ? await navigator.serial.getPorts() : [];
+    port = granted.length === 1 ? granted[0] : await navigator.serial.requestPort({ filters: USB_SERIAL_FILTERS });
     await port.open({ baudRate: 115200, bufferSize: 8192 });
     // DTR=RTS=false => EN high, IO0 high on DevKitC auto-reset circuit (normal run mode)
     await port.setSignals({ dataTerminalReady: false, requestToSend: false });
@@ -59,14 +63,14 @@ async function connect() {
       toast(`เปิดพอร์ตไม่ได้: ${hint}`, 9000);
       appendLog($('prov-log'), `! ${err.message}\n! ${hint}`, 'err');
     }
-    return;
+    return false;
   }
   setPill($('prov-status'), 'Connected', 'on');
   $('prov-connect').disabled = true;
   $('prov-disconnect').disabled = false;
   $('prov-reset').disabled = false;
   readLoopDone = readLoop();
-  await refreshInfo(3);
+  return refreshInfo(3);
 }
 
 async function disconnect() {
@@ -91,6 +95,7 @@ function cleanup(msg) {
   $('prov-relays').replaceChildren(el('tr', {},
     el('td', { colspan: 7, class: 'muted' }, 'เชื่อมต่อบอร์ดผ่าน USB เพื่อดูผังขาและทดสอบรีเลย์')));
   renderPickList();
+  boardListeners.forEach(fn => fn(null));
   if (msg) toast(msg);
 }
 
@@ -197,6 +202,7 @@ async function refreshInfo(retries = 1) {
 
 function showInfo(info) {
   lastInfo = info;
+  boardListeners.forEach(fn => fn(info));
   const rows = [
     ['Chip', `${info.chip} rev ${info.rev} · ${info.flash_mb} MB`],
     ['Firmware', info.fw],
@@ -529,4 +535,45 @@ function syncPresetToHost() {
     note.textContent = o?.note || (host ? 'กรอกเอง — ตรวจ Port และช่อง TLS ให้ตรงกับ broker' : 'เลือกจากรายการ หรือพิมพ์ชื่อโฮสต์ / IP ของ broker');
     note.className = `field-note${o?.public ? ' warn' : ''}`;
   }
+}
+
+// ---------- API for the setup wizard ----------
+const boardListeners = new Set();
+/** fn(info) after every info refresh; fn(null) when the USB port closes. */
+export const onBoard = fn => boardListeners.add(fn);
+export const getBoardInfo = () => (port ? lastInfo : null);
+/** Must be called from a click handler. Reuses an already-allowed port when possible. */
+export const connectBoard = () => connect({ reuse: true });
+export async function scanWifi() {
+  const res = await request({ cmd: 'scan' }, 15000);
+  return (res.networks || []).filter(n => n.ssid).sort((a, b) => b.rssi - a.rssi)
+    .filter((n, i, arr) => arr.findIndex(x => x.ssid === n.ssid) === i);
+}
+/**
+ * Sends a config to the board, waits for the reboot, then polls until Wi-Fi and MQTT are up
+ * (or timeoutMs passes / Wi-Fi clearly failed). Resolves with the last info; onTick(info) gets every refresh.
+ */
+export async function applyBoardConfig(cfg, { timeoutMs = 40000, onTick } = {}) {
+  const payload = { cmd: 'set_config', ...cfg };
+  const shown = { ...payload };
+  if (shown.wifi_pass) shown.wifi_pass = '***';
+  if (shown.mqtt_pass) shown.mqtt_pass = '***';
+  const res = await request(payload, 3000, shown);
+  if (!res.ok) throw new Error(res.error || 'บอร์ดไม่รับค่าที่ส่งไป');
+  if (cfg.mqtt_host) rememberBroker({ host: cfg.mqtt_host, port: cfg.mqtt_port, tls: cfg.mqtt_tls });
+  await sleep(4000);
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    try {
+      const r = await request({ cmd: 'info' }, 2000);
+      if (r.ok) {
+        showInfo(r.info);
+        onTick?.(r.info);
+        if (r.info.wifi === 'connected' && r.info.mqtt) return r.info;
+        if (r.info.wifi === 'auth_failed' || r.info.wifi === 'ssid_not_found') return r.info;
+      }
+    } catch { /* still booting */ }
+    await sleep(2000);
+  }
+  return lastInfo;
 }

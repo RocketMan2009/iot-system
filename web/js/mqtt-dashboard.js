@@ -50,6 +50,7 @@ function connect(form) {
   render();
 
   setPill($('mqtt-status'), 'Connecting…', 'busy');
+  notify('connecting');
   const c = mqtt.connect(f.url, {
     username: f.username || undefined,
     password: f.password || undefined,
@@ -65,6 +66,7 @@ function connect(form) {
   const current = fn => (...args) => { if (client === c) fn(...args); };
   c.on('connect', current(() => {
     setPill($('mqtt-status'), 'Connected', 'on');
+    notify('connected');
     $('mqtt-connect').disabled = true;
     $('mqtt-disconnect').disabled = false;
     c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`], { qos: 1 });
@@ -76,8 +78,8 @@ function connect(form) {
   }));
   c.on('reconnect', current(() => setPill($('mqtt-status'), 'Reconnecting…', 'busy')));
   c.on('offline', current(() => setPill($('mqtt-status'), 'Offline', 'err')));
-  c.on('error', current(err => { setPill($('mqtt-status'), 'Error', 'err'); toast(`MQTT: ${err.message}`, 5000); }));
-  c.on('close', current(() => { setPill($('mqtt-status'), 'Disconnected', 'off'); render(); }));
+  c.on('error', current(err => { setPill($('mqtt-status'), 'Error', 'err'); toast(`MQTT: ${err.message}`, 5000); notify('error', { error: err.message }); }));
+  c.on('close', current(() => { setPill($('mqtt-status'), 'Disconnected', 'off'); render(); notify('closed'); }));
   c.on('message', current(onMessage));
 }
 
@@ -295,6 +297,7 @@ function ago(ts) {
 
 function render() {
   syncScheduleDevices();
+  if (client?.connected) notify('connected');
   const wrap = $('devices');
   $('device-count').textContent = `${devices.size} บอร์ด`;
   wrap.replaceChildren();
@@ -649,4 +652,23 @@ function saveSchedule() {
     updateScheduleButtons();
   }, 5000);
   updateScheduleButtons();
+}
+
+// ---------- API for the setup wizard ----------
+const watchers = new Set();
+/** fn({ state: 'connecting'|'connected'|'error'|'closed', error?, devices }) on broker / device changes. */
+export const onBrokerChange = fn => watchers.add(fn);
+const notify = (state, extra = {}) => watchers.forEach(fn => fn({ state, devices, ...extra }));
+export const getDevice = id => devices.get(id);
+export const brokerConnected = () => !!client?.connected;
+export const sendRelay = (id, ch, cmd) => send(id, ch, cmd);
+/** Fills the broker form with these values and connects (same path as pressing "เชื่อมต่อ"). */
+export function connectBroker({ url, username, password, base: b, remember = true }) {
+  const f = $('mqtt-form').elements;
+  f.url.value = url;
+  f.username.value = username || '';
+  f.password.value = password || '';
+  f.base.value = b || 'home';
+  f.remember.checked = remember;
+  connect($('mqtt-form'));
 }

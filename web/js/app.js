@@ -3,6 +3,8 @@ import { initProvision } from './provision.js';
 import { initFlasher } from './flasher.js';
 import { onPins } from './pins-state.js';
 import { renderWiring, wiringTable } from './wiring.js';
+import { initWizard } from './wizard.js';
+import { store } from './util.js';
 
 // ---------- tabs ----------
 const tabs = document.querySelectorAll('.tab');
@@ -12,7 +14,10 @@ function showTab(name) {
   try { localStorage.setItem('hub.tab', name); } catch {}
 }
 tabs.forEach(t => t.addEventListener('click', () => showTab(t.dataset.tab)));
-try { const saved = localStorage.getItem('hub.tab'); if (saved) showTab(saved); } catch {}
+// first visit (never finished setup, never connected a broker): start with the guided setup
+let savedTab = null;
+try { savedTab = localStorage.getItem('hub.tab'); } catch {}
+showTab(savedTab || (!store('hub.wizardDone') && !store('hub.mqtt') ? 'start' : 'dashboard'));
 
 // ---------- feature detection ----------
 if (!('serial' in navigator)) document.getElementById('serial-warning').hidden = false;
@@ -20,6 +25,7 @@ if (!('serial' in navigator)) document.getElementById('serial-warning').hidden =
 initDashboard();
 initProvision();
 initFlasher();
+initWizard(document.getElementById('wizard'), showTab);
 
 // ---------- overview: wiring follows the relay pin selection ----------
 const $ = id => document.getElementById(id);

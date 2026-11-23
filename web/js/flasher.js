@@ -34,7 +34,17 @@ const terminal = { clean() {}, writeLine: d => log(d), write: d => log(d) };
 function setProgress(pct, text) {
   $('flash-bar').style.width = `${pct}%`;
   $('flash-progress-text').textContent = text || '';
+  emit({ type: 'progress', pct, text });
 }
+
+// ---------- API for the setup wizard ----------
+const flashListeners = new Set();
+const emit = e => flashListeners.forEach(fn => fn(e));
+/** fn({type:'progress'|'done'|'error'|'cancel', pct?, text?, message?}) */
+export const onFlash = fn => flashListeners.add(fn);
+/** Must be called from a click handler (opens the USB port picker). */
+export const flashLatest = () => run('latest');
+export const hasHostedFirmware = () => !!manifest;
 
 // ArrayBuffer -> "binary string" (format esptool-js 0.4 expects)
 function toBinaryString(buf) {
@@ -105,7 +115,7 @@ async function run(action) {
     catch (err) { toast(err.message, 6000); log(`! ${err.message}`, 'err'); return; }
     if (!images.length) return toast('เลือกไฟล์ .bin ก่อน');
   } else if (action === 'latest') {
-    if (!manifest) return;
+    if (!manifest) return emit({ type: 'error', message: 'ยังไม่มีเฟิร์มแวร์บนเว็บนี้ (manifest.json ไม่พบ)' });
   } else if (!confirm('ลบข้อมูลทั้งหมดในแฟลช (เฟิร์มแวร์ + config)?')) {
     return;
   }
@@ -117,7 +127,7 @@ async function run(action) {
   try {
     let port;
     try { port = await navigator.serial.requestPort({ filters: USB_SERIAL_FILTERS }); }
-    catch { return; }   // user cancelled the picker (picker must open first, while the click still counts)
+    catch { emit({ type: 'cancel' }); return; }   // user cancelled the picker (picker must open first, while the click still counts)
     if (action === 'latest') images = await fetchLatestImage();
 
     setPill($('flash-status'), 'Loading…', 'busy');
@@ -168,6 +178,7 @@ async function run(action) {
     setProgress(100, images.length ? 'แฟลชสำเร็จ — บอร์ดรีบูตแล้ว ไปแท็บ “ตั้งค่าบอร์ด” ต่อได้เลย' : 'ลบแฟลชเรียบร้อย');
     setPill($('flash-status'), 'Done', 'on');
     toast(images.length ? 'แฟลชสำเร็จ ✔' : 'ลบแฟลชเรียบร้อย ✔');
+    emit({ type: 'done' });
   } catch (err) {
     console.error(err);
     setPill($('flash-status'), 'Failed', 'err');
@@ -177,6 +188,7 @@ async function run(action) {
       : 'ไม่สำเร็จ — ลองกดปุ่ม BOOT ค้างไว้ตอนเริ่มเชื่อมต่อ หรือลด baud rate';
     log(`! ${hint}`, 'err');
     toast(hint, 9000);
+    emit({ type: 'error', message: hint });
   } finally {
     try { await transport?.disconnect(); } catch {}
     serialLock.release(LOCK);

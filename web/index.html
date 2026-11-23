@@ -20,6 +20,7 @@
       </div>
     </div>
     <nav class="tabs" role="tablist">
+      <button class="tab tab-start" data-tab="start" role="tab">★ เริ่มต้นใช้งาน</button>
       <button class="tab active" data-tab="dashboard" role="tab">แดชบอร์ด</button>
       <button class="tab" data-tab="provision" role="tab">ตั้งค่าบอร์ด (USB)</button>
       <button class="tab" data-tab="flash" role="tab">แฟลชเฟิร์มแวร์</button>
@@ -32,6 +33,11 @@
   </div>
 
   <main>
+    <!-- ================= SETUP WIZARD ================= -->
+    <section id="tab-start" class="panel">
+      <div id="wizard"></div>
+    </section>
+
     <!-- ================= DASHBOARD ================= -->
     <section id="tab-dashboard" class="panel active">
       <div class="card broker">
