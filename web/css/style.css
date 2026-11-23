@@ -475,3 +475,11 @@ a.btn { text-decoration: none; display: inline-block; }
 }
 .tab.tab-start { color: var(--accent); font-weight: 600; }
 .tab.tab-start.active { color: var(--text); }
+
+/* broker connection diagnosis */
+.diag { text-align: left; margin-top: 12px; padding: 12px 14px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 9%, transparent); border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); }
+.diag > b { color: var(--danger); }
+.diag p { margin: 6px 0 0; }
+.diag code { font-size: .82rem; overflow-wrap: anywhere; }
+.diag-list { margin: 8px 0 0; padding-left: 20px; font-size: .88rem; color: var(--text); }
+.sched-empty .diag { margin: 0 0 10px; }

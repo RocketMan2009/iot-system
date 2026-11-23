@@ -51,6 +51,7 @@ function connect(form) {
 
   setPill($('mqtt-status'), 'Connecting…', 'busy');
   notify('connecting');
+  conn = { url: f.url, username: f.username, attempts: 0, error: '', authFailed: false };
   const c = mqtt.connect(f.url, {
     username: f.username || undefined,
     password: f.password || undefined,
@@ -76,11 +77,72 @@ function connect(form) {
     // retained info arrives within a moment; if nothing came, say so instead of waiting silently
     setTimeout(current(() => { if (!devices.size) render(); }), 3000);
   }));
-  c.on('reconnect', current(() => setPill($('mqtt-status'), 'Reconnecting…', 'busy')));
+  c.on('reconnect', current(() => {
+    conn.attempts++;
+    setPill($('mqtt-status'), `Reconnecting… (${conn.attempts})`, 'busy');
+    render();
+  }));
   c.on('offline', current(() => setPill($('mqtt-status'), 'Offline', 'err')));
-  c.on('error', current(err => { setPill($('mqtt-status'), 'Error', 'err'); toast(`MQTT: ${err.message}`, 5000); notify('error', { error: err.message }); }));
-  c.on('close', current(() => { setPill($('mqtt-status'), 'Disconnected', 'off'); render(); notify('closed'); }));
+  c.on('error', current(err => {
+    conn.error = err.message || String(err);
+    // CONNACK 4 = bad username/password, 5 = not authorized: retrying can't fix it, so stop
+    if (err.code === 4 || err.code === 5 || /not authori[sz]ed|bad user ?name or password/i.test(conn.error)) {
+      conn.authFailed = true;
+      c.end(true);
+      setPill($('mqtt-status'), 'Username / Password ผิด', 'err');
+    } else {
+      setPill($('mqtt-status'), 'Error', 'err');
+    }
+    toast(`MQTT: ${explainError(conn)}`, 7000);
+    notify('error', { error: conn.error });
+    render();
+  }));
+  c.on('close', current(() => {
+    if (!conn.authFailed) setPill($('mqtt-status'), conn.attempts ? `ติดต่อไม่ได้ — ลองใหม่ (${conn.attempts})` : 'Disconnected', 'off');
+    render();
+    notify('closed');
+  }));
   c.on('message', current(onMessage));
+}
+
+// ---------- connection diagnostics ----------
+let conn = { url: '', username: '', attempts: 0, error: '', authFailed: false };
+
+/** Things in the settings that are certainly wrong, in plain Thai. */
+function settingProblems({ url, username }) {
+  const out = [];
+  let u = null;
+  try { u = new URL(url); } catch { out.push('WebSocket URL ไม่ถูกรูปแบบ — ตัวอย่างที่ถูก: wss://abc123.s1.eu.hivemq.cloud:8884/mqtt'); return out; }
+  if (location.protocol === 'https:' && u.protocol !== 'wss:') out.push('ต้องขึ้นต้นด้วย wss:// (มี s)');
+  if (/hivemq\.cloud$/i.test(u.hostname)) {
+    if (u.port && u.port !== '8884') out.push(`พอร์ตต้องเป็น 8884 (ตอนนี้ ${u.port}) — 8883 เป็นของบอร์ด ไม่ใช่ของหน้าเว็บ`);
+    if (!u.port) out.push('ต้องมี :8884 ต่อท้ายชื่อ cluster');
+    if (u.pathname !== '/mqtt') out.push('ต้องลงท้ายด้วย /mqtt');
+  }
+  if (/@/.test(username || '')) out.push('Username เป็นอีเมล — ต้องใช้บัญชีที่สร้างใน HiveMQ → Access Management → Credentials ไม่ใช่ Gmail');
+  if (!username) out.push('ยังไม่ได้ใส่ Username (HiveMQ Cloud ต้องมีบัญชีเสมอ)');
+  return out;
+}
+
+/** Diagnosis box for a connection that is failing (null while it simply hasn't finished yet). */
+function connectionDiag() {
+  if (!client || client.connected) return null;
+  const problems = settingProblems(conn);
+  if (!conn.authFailed && !conn.error && !conn.attempts && !problems.length) return null;
+  return el('div', { class: 'diag' },
+    el('b', {}, conn.authFailed ? '✘ Username หรือ Password ไม่ถูกต้อง' : '✘ เชื่อมต่อ broker ไม่สำเร็จ'),
+    el('p', { class: 'small-note' }, explainError(conn) || 'กำลังลองใหม่…'),
+    problems.length ? el('ul', { class: 'diag-list' }, problems.map(p => el('li', {}, p))) : null,
+    el('p', { class: 'small-note muted' }, 'URL ที่ใช้อยู่: ', el('code', {}, conn.url || '—'), ' · Username: ', el('code', {}, conn.username || '—')),
+    el('p', { class: 'small-note muted' }, 'ตรวจได้ที่ console.hivemq.cloud → Manage Cluster: Overview (ชื่อ cluster) และ Access Management → Credentials (บัญชี)'),
+  );
+}
+
+function explainError(c) {
+  if (c.authFailed) return 'Username หรือ Password ไม่ถูกต้อง — ใช้บัญชีที่สร้างใน HiveMQ → Access Management → Credentials (ไม่ใช่อีเมล/รหัส Gmail)';
+  if (c.error) return `${c.error}`;
+  if (c.attempts) return 'ติดต่อ broker ไม่ได้ — ตรวจ WebSocket URL และอินเทอร์เน็ต';
+  return '';
 }
 
 function disconnect() {
@@ -296,6 +358,7 @@ function ago(ts) {
 }
 
 function render() {
+  $('mqtt-diag')?.replaceChildren(...[connectionDiag()].filter(Boolean));
   syncScheduleDevices();
   if (client?.connected) notify('connected');
   const wrap = $('devices');
@@ -629,8 +692,10 @@ function noBoardHelp() {
     title = 'ยังไม่ได้เชื่อมต่อ broker';
     detail = 'กรอก WebSocket URL, Username, Password และ Base topic ในการ์ด “MQTT Broker” ด้านบน แล้วกด “เชื่อมต่อ” (ติ๊ก “จำรหัสผ่าน” เพื่อให้เชื่อมต่อเองครั้งหน้า)';
   } else if (!client.connected) {
+    const box = connectionDiag();
+    if (box) return el('div', { class: 'sched-empty' }, box, jump);
     title = 'กำลังเชื่อมต่อ broker…';
-    detail = 'ถ้าค้างนาน หรือขึ้น Error ให้ตรวจ URL (wss://…:8884/mqtt) และ username / password';
+    detail = 'รอสักครู่…';
   } else {
     title = `เชื่อมต่อแล้ว แต่ไม่พบบอร์ดใน “${base}/+/info”`;
     detail = `ตรวจว่า Base topic ด้านบนตรงกับที่ตั้งในบอร์ดทุกตัวอักษร (ตัวพิมพ์ใหญ่-เล็กต่างกัน) — ดูค่าจริงได้ในแท็บ “ตั้งค่าบอร์ด (USB)” · ` +
