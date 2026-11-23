@@ -181,6 +181,8 @@
             <p id="pick-note" class="muted small-note">เชื่อมต่อบอร์ดผ่าน USB เพื่อบันทึก — วางแผนต่อสายได้เลยโดยไม่ต้องต่อบอร์ด</p>
           </div>
         </div>
+        <h3 class="sub-h">ผังการต่อวงจร <span class="muted">— เปลี่ยนตามขาที่เลือกด้านบนทันที (ชี้เมาส์ที่สายเพื่อดูรายละเอียด)</span></h3>
+        <div id="pick-wiring" class="wiring-wrap"></div>
       </div>
 
       <div class="card">
@@ -299,6 +301,31 @@
     </section>
     <!-- ================= OVERVIEW ================= -->
     <section id="tab-overview" class="panel">
+      <div class="card">
+        <div class="card-head">
+          <h2>วงจรการต่ออุปกรณ์</h2>
+          <div class="row">
+            <span id="ov-wiring-count" class="pill on"></span>
+            <button id="ov-edit-pins" class="btn small" type="button">เปลี่ยนขารีเลย์</button>
+          </div>
+        </div>
+        <p class="muted small-note">
+          ผังนี้วาดตามขารีเลย์ที่เลือกในแท็บ “ตั้งค่าบอร์ด (USB)” — เปลี่ยนขาที่นั่นแล้วรูปนี้เปลี่ยนตามทันที ·
+          ชี้เมาส์ที่สายเพื่อดูว่าต่อจากขาไหนไปขาไหน
+        </p>
+        <div id="ov-wiring" class="wiring-wrap"></div>
+        <div class="two-col wiring-info">
+          <div class="table-wrap" id="ov-wiring-table"></div>
+          <ul class="wiring-notes">
+            <li><b>ไฟเลี้ยงโมดูล:</b> VCC → 5V ของบอร์ด (หรือแหล่งจ่าย 5V แยก) · GND ต้องต่อร่วมกับ GND ของ ESP32 เสมอ</li>
+            <li><b>สายสัญญาณ:</b> GPIO แต่ละขา → IN ของช่องเดียวกัน (CH1 → IN1 …) โมดูลส่วนใหญ่เป็น Active-LOW</li>
+            <li><b>ฝั่งไฟบ้าน:</b> สาย L เข้า <b>COM</b> · ขา <b>NO</b> ไปที่เครื่องใช้ไฟฟ้า · สาย N ต่อตรงเข้าเครื่องใช้ไฟฟ้า (ไม่ผ่านรีเลย์)</li>
+            <li><b>NO</b> = ปกติเปิดวงจร (สั่ง ON แล้วไฟไหล) · <b>NC</b> = ปกติปิดวงจร (ใช้กลับด้าน)</li>
+            <li>⚠ งานไฟ 220V ต้องตัดไฟก่อนต่อสาย ใช้รีเลย์ที่รับกระแสได้พอ (เช่น 10A) และติดตั้งในกล่องปิดมิดชิด</li>
+          </ul>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-head">
           <h2>สถาปัตยกรรม MQTT</h2>

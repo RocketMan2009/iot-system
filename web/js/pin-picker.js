@@ -6,9 +6,9 @@ import { el } from './util.js';
 export const SAFE_PINS = [4, 13, 14, 16, 17, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
 export const DEFAULT_PINS = [16, 17, 18, 19, 23, 25, 26, 27];
 
-const J2 = ['3V3', 'EN', 36, 39, 34, 35, 32, 33, 25, 26, 27, 14, 12, 'GND', 13, 9, 10, 11, '5V'];   // left
-const J3 = ['GND', 23, 22, 1, 3, 21, 'GND', 19, 18, 5, 17, 16, 4, 0, 2, 15, 8, 7, 6];             // right
-const ALIAS = { 36: 'VP', 39: 'VN', 1: 'TX', 3: 'RX', 9: 'D2', 10: 'D3', 11: 'CMD', 8: 'D1', 7: 'D0', 6: 'CLK' };
+export const J2 = ['3V3', 'EN', 36, 39, 34, 35, 32, 33, 25, 26, 27, 14, 12, 'GND', 13, 9, 10, 11, '5V'];   // left
+export const J3 = ['GND', 23, 22, 1, 3, 21, 'GND', 19, 18, 5, 17, 16, 4, 0, 2, 15, 8, 7, 6];             // right
+export const ALIAS = { 36: 'VP', 39: 'VN', 1: 'TX', 3: 'RX', 9: 'D2', 10: 'D3', 11: 'CMD', 8: 'D1', 7: 'D0', 6: 'CLK' };
 
 // kind -> [css class, Thai reason shown in tooltip / legend]
 const KINDS = {
@@ -26,7 +26,7 @@ const CAUTION_NOTE = {
   22: 'GPIO22 เป็น SCL ของ I²C โดยปกติ — เลือกได้ถ้าไม่ใช้เซนเซอร์ I²C',
 };
 
-function kindOf(p) {
+export function kindOf(p) {
   if (typeof p === 'string') return 'power';
   if ([6, 7, 8, 9, 10, 11].includes(p)) return 'flash';
   if ([0, 2, 5, 12, 15].includes(p)) return 'strap';

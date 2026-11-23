@@ -1,6 +1,8 @@
 // USB provisioning over Web Serial. Protocol: docs/DESIGN.md §3.2 (newline-delimited JSON @115200)
 import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint } from './util.js';
 import { createPinPicker, headerPosition, DEFAULT_PINS } from './pin-picker.js';
+import { getPins, setPins, onPins } from './pins-state.js';
+import { renderWiring } from './wiring.js';
 
 const $ = id => document.getElementById(id);
 const LOCK = 'ตั้งค่าบอร์ด';
@@ -359,6 +361,8 @@ let picker;
 
 function initPicker() {
   picker = createPinPicker($('pin-picker'), { onChange: renderPickList });
+  picker.setPins(getPins());                       // last selection in this browser
+  onPins(pins => renderWiring($('pick-wiring'), pins));
   $('pick-default').addEventListener('click', () => { picker.setPins(DEFAULT_PINS); renderPickList(); });
   $('pick-clear').addEventListener('click', () => { picker.setPins([]); renderPickList(); });
   $('pick-save').addEventListener('click', savePins);
@@ -367,6 +371,7 @@ function initPicker() {
 
 function renderPickList() {
   const pins = picker.getPins();
+  setPins(pins);   // wiring diagrams (this tab + overview) follow the picker
   $('pick-count').textContent = `${pins.length} ช่อง`;
   $('pick-list').replaceChildren(...(pins.length
     ? pins.map((g, i) => el('li', {}, el('b', {}, `CH${i + 1}`), ` → GPIO${g}`, el('span', { class: 'muted' }, ` · ${headerPosition(g)}`)))

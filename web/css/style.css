@@ -242,6 +242,65 @@ label.check.small { font-size: .82rem; }
 .tbar .mark.off { background: var(--danger); }
 .dirty-dot { color: #d97706; font-weight: 600; }
 
+/* wiring diagram */
+:root { --wire-gnd: #1f2328; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --wire-gnd: #cbd5e1; } }
+:root[data-theme="dark"] { --wire-gnd: #cbd5e1; }
+.wiring-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.wiring { display: block; width: 100%; min-width: 760px; height: auto; font-family: "IBM Plex Sans Thai", sans-serif; }
+.wiring .pcb { fill: #1b1d22; }
+.wiring .antenna-bg { fill: #1b1d22; }
+.wiring .antenna { fill: none; stroke: #c9a227; stroke-width: 3; }
+.wiring .module { fill: #2b2f36; stroke: #4b5563; }
+.wiring .shield { fill: #c3c9d0; }
+.wiring .chip { font: 600 9px "IBM Plex Mono", monospace; fill: #374151; }
+.wiring .chip-sub { font: 10px "IBM Plex Mono", monospace; fill: #374151; }
+.wiring .usb { fill: #a3aab3; }
+.wiring .btn-hw { fill: #111; stroke: #6b7280; }
+.wiring .tiny { font: 600 9px "IBM Plex Mono", monospace; fill: #cbd5e1; }
+.wiring .pin { fill: #facc15; stroke: #a16207; stroke-width: 1.5; }
+.wiring .silk { font: 9px "IBM Plex Mono", monospace; fill: #e5e7eb; }
+.wiring .stub { stroke: var(--muted); stroke-width: 1.2; }
+.wiring .tag { opacity: .45; }
+.wiring .tag.used { opacity: 1; stroke: #0b0b0b; stroke-width: 1; }
+.wiring .tag-text { font: 600 10px "IBM Plex Mono", monospace; fill: #fff; }
+.wiring .tag-text.dark { fill: #1f2328; }
+.wiring .rpcb { fill: #0f172a; stroke: #334155; }
+.wiring .rtitle { font-size: 13px; font-weight: 600; fill: var(--text); }
+.wiring .rpin { fill: #e5e7eb; stroke: #94a3b8; }
+.wiring .rpin-label { font: 600 11px "IBM Plex Mono", monospace; fill: #e2e8f0; }
+.wiring .relay-cube { fill: #1d4ed8; stroke: #1e3a8a; }
+.wiring .cube-text { font: 9px "IBM Plex Mono", monospace; fill: #dbeafe; }
+.wiring .terminal { fill: #2563eb; stroke: #1e40af; }
+.wiring .screw { fill: #cbd5e1; stroke: #475569; }
+.wiring .term-label { font: 600 9px "IBM Plex Mono", monospace; fill: #e2e8f0; }
+.wiring .ac { fill: none; stroke-width: 2.4; stroke-linecap: round; }
+.wiring .ac.l, .wiring .bus.l { stroke: #dc2626; }
+.wiring .ac.n, .wiring .bus.n { stroke: #2563eb; }
+.wiring .bus { stroke-width: 3.5; }
+.wiring .joint.l { fill: #dc2626; } .wiring .joint.n { fill: #2563eb; }
+.wiring .bus-label { font: 700 22px "IBM Plex Sans Thai", sans-serif; }
+.wiring .bus-label.l { fill: #dc2626; } .wiring .bus-label.n { fill: #2563eb; }
+.wiring .mains-note { font-size: 11px; fill: var(--muted); }
+.wiring .load-icon circle { fill: #f5efe0; stroke: #8b7d5b; stroke-width: 1.5; }
+.wiring .load-icon ellipse { fill: #b9ab86; }
+.wiring .load-icon .hub { fill: #6b5f43; stroke: none; }
+.wiring .load-label { font-size: 11px; fill: var(--text); }
+.wiring .wire .halo { fill: none; stroke: var(--surface); stroke-width: 6.5; stroke-linejoin: round; stroke-linecap: round; }
+.wiring .wire .core { fill: none; stroke-width: 3; stroke-linejoin: round; stroke-linecap: round; }
+.wiring .wire { transition: opacity .15s; cursor: help; }
+.wiring .w-wires:hover .wire { opacity: .25; }
+.wiring .w-wires .wire:hover { opacity: 1; }
+.wiring .w-wires .wire:hover .core { stroke-width: 4.5; }
+.wiring-table { margin-top: 12px; }
+.wiring-info { margin-top: 4px; align-items: start; }
+.sub-h { margin: 18px 0 8px; font-size: .95rem; }
+.sub-h .muted { font-weight: 400; font-size: .82rem; }
+.wiring-table td, .wiring-table th { padding: 5px 10px; }
+.swatch { display: inline-block; width: 22px; height: 6px; border-radius: 3px; vertical-align: middle; }
+.wiring-notes { margin: 10px 0 0; padding-left: 18px; font-size: .88rem; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.wiring-notes b { color: var(--text); }
+
 /* overview */
 .diagram-wrap { overflow-x: auto; border-radius: 10px; border: 1px solid var(--border); }
 .diagram-wrap img { display: block; width: 100%; min-width: 760px; height: auto; }

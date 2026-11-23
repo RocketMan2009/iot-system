@@ -1,6 +1,8 @@
 import { initDashboard } from './mqtt-dashboard.js';
 import { initProvision } from './provision.js';
 import { initFlasher } from './flasher.js';
+import { onPins } from './pins-state.js';
+import { renderWiring, wiringTable } from './wiring.js';
 
 // ---------- tabs ----------
 const tabs = document.querySelectorAll('.tab');
@@ -18,3 +20,15 @@ if (!('serial' in navigator)) document.getElementById('serial-warning').hidden =
 initDashboard();
 initProvision();
 initFlasher();
+
+// ---------- overview: wiring follows the relay pin selection ----------
+const $ = id => document.getElementById(id);
+onPins(pins => {
+  renderWiring($('ov-wiring'), pins);
+  $('ov-wiring-table').replaceChildren(wiringTable(pins));
+  $('ov-wiring-count').textContent = `รีเลย์ ${pins.length} ช่อง`;
+});
+$('ov-edit-pins').addEventListener('click', () => {
+  showTab('provision');
+  $('pin-picker').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
