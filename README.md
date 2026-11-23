@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="web/img/logo-dark.svg">
+    <img src="web/img/logo-light.svg" alt="ESP32 Control Hub — MQTT · Web Serial · Browser Flasher" width="480">
+  </picture>
+</p>
+
 # ESP32 Control Hub
 
 เว็บแอปควบคุมอุปกรณ์ไฟฟ้าผ่าน **MQTT** + ตั้งค่าและ **แฟลช ESP32 ผ่านเบราว์เซอร์** (Web Serial / esptool-js)

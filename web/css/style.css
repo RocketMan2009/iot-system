@@ -54,7 +54,7 @@ h2 { font-size: 1rem; }
   padding: 12px 24px; background: var(--surface); border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 12px; }
-.logo { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: var(--accent-ink); font-size: 18px; }
+.logo { display: block; width: 40px; height: 40px; border-radius: 10px; flex: none; }
 .sub { margin: 0; font-size: .8rem; color: var(--muted); }
 .tabs { display: flex; gap: 4px; background: var(--surface-2); padding: 4px; border-radius: 10px; overflow-x: auto; }
 .tab { border: 0; background: none; color: var(--muted); padding: 7px 14px; border-radius: 7px; font: inherit; font-weight: 500; cursor: pointer; white-space: nowrap; }
