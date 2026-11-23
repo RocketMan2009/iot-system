@@ -35,8 +35,31 @@ export function initDashboard() {
   else if (saved.url) setPill($('mqtt-status'), 'ใส่รหัสผ่านแล้วกดเชื่อมต่อ', 'busy');
 }
 
+// HiveMQ's copy buttons give "xxxx.hivemq.cloud:8884/mqtt" without a scheme, and people paste the
+// MQTT URL / host instead of the WebSocket one. Turn all of those into a working wss:// URL.
+export function normalizeWsUrl(value) {
+  let s = (value || '').trim();
+  if (!s) return s;
+  s = s.replace(/^mqtts?:\/\//i, 'wss://');
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = (location.protocol === 'https:' || /hivemq\.cloud/i.test(s) ? 'wss://' : 'ws://') + s;
+  try {
+    const u = new URL(s);
+    if (/hivemq\.cloud$/i.test(u.hostname)) {
+      return `wss://${u.hostname}:8884/mqtt`;   // the only WebSocket endpoint HiveMQ Cloud offers
+    }
+    return s;
+  } catch {
+    return s;
+  }
+}
+
 function connect(form) {
   if (typeof mqtt === 'undefined') { toast('โหลดไลบรารี mqtt.js ไม่สำเร็จ (ตรวจอินเทอร์เน็ต)'); return; }
+  const fixed = normalizeWsUrl(form.elements.url.value);
+  if (fixed && fixed !== form.elements.url.value.trim()) {
+    form.elements.url.value = fixed;
+    toast(`ปรับ WebSocket URL ให้ถูกรูปแบบแล้ว: ${fixed}`, 5000);
+  }
   const f = Object.fromEntries(new FormData(form));
   base = f.base.replace(/\/+$/, '');
   store('hub.mqtt', { url: f.url, username: f.username, base, password: f.remember ? f.password : '' });

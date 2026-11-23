@@ -486,6 +486,22 @@ function initHostPresets() {
     if (o.public) f.base.focus();          // public broker: pick a unique base topic next
   });
   $('prov-form').elements.mqtt_host.addEventListener('input', syncPresetToHost);
+  // A pasted URL ("…hivemq.cloud:8883", "wss://…:8884/mqtt") becomes host + port.
+  // 8884 is HiveMQ's WebSocket port (for the dashboard); the board needs 8883.
+  $('prov-form').elements.mqtt_host.addEventListener('change', () => {
+    const f = $('prov-form').elements;
+    const m = f.mqtt_host.value.trim().match(/^(?:([a-z]+):\/\/)?([^/:\s]+)(?::(\d+))?/i);
+    if (!m) return;
+    const [, scheme, host, port] = m;
+    const changed = host !== f.mqtt_host.value.trim();
+    f.mqtt_host.value = host;
+    let p = port ? Number(port) : null;
+    if (/^wss?$/i.test(scheme || '') || p === 8884) p = 8883;
+    if (!p && /hivemq\.cloud$/i.test(host)) p = 8883;
+    if (p) { f.mqtt_port.value = p; f.mqtt_tls.checked = p === 8883; }
+    if (changed) toast(`ใช้ Host = ${host}${p ? `, Port = ${p}` : ''} ให้แล้ว`, 4000);
+    syncPresetToHost();
+  });
   // dashboard settings may change while the page is open
   document.querySelector('[data-tab="provision"]')?.addEventListener('click', buildHostPresets);
   buildHostPresets();
