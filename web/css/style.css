@@ -5,7 +5,8 @@
   --border: #dfe3e8;
   --text: #1b1f24;
   --muted: #65707c;
-  --accent: #0f766e;
+  --accent: #2563d9;        /* PlugPilot blue */
+  --brand-navy: #2b3086;
   --accent-ink: #ffffff;
   --on: #16a34a;
   --off: #94a3b8;
@@ -21,14 +22,14 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0e1116; --surface: #161b22; --surface-2: #1d232c; --border: #2a313b;
-    --text: #e6edf3; --muted: #8b96a3; --accent: #2dd4bf; --accent-ink: #062723;
+    --text: #e6edf3; --muted: #8b96a3; --accent: #6ea8ff; --accent-ink: #0b1640; --brand-navy: #e3e9ff;
     --on: #22c55e; --off: #4b5563; --warn-bg: #2b2210; --warn-ink: #f5c463;
     --danger: #fb7c3c; --console-bg: #0a0d11; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0e1116; --surface: #161b22; --surface-2: #1d232c; --border: #2a313b;
-  --text: #e6edf3; --muted: #8b96a3; --accent: #2dd4bf; --accent-ink: #062723;
+  --text: #e6edf3; --muted: #8b96a3; --accent: #6ea8ff; --accent-ink: #0b1640; --brand-navy: #e3e9ff;
   --on: #22c55e; --off: #4b5563; --warn-bg: #2b2210; --warn-ink: #f5c463;
   --danger: #fb7c3c; --console-bg: #0a0d11; color-scheme: dark;
 }
@@ -157,7 +158,7 @@ label.check.small { font-size: .82rem; }
 .picker-side h3 { margin: 0 0 8px; font-size: .95rem; }
 .pick-list { margin: 0 0 12px; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: .88rem; }
 .pick-list b { display: inline-block; min-width: 44px; color: var(--accent); }
-.board .pcb { fill: #1f4e8c; }
+.board .pcb { fill: #1b1d22; }
 .board .module { fill: #2b2f36; stroke: #50565f; }
 .board .shield { fill: #b9c0c8; }
 .board .antenna { fill: none; stroke: #c9a227; stroke-width: 3; }
@@ -381,3 +382,8 @@ a.btn { text-decoration: none; display: inline-block; }
   .file-row { grid-template-columns: 64px 1fr; }
   .file-row > .muted { display: none; }
 }
+
+/* brand wordmark in the header */
+.brand h1 { font-size: 1.35rem; letter-spacing: -.3px; }
+.brand h1 .b-plug { color: var(--brand-navy); }
+.brand h1 .b-pilot { color: var(--accent); }

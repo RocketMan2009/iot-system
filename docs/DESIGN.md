@@ -1,4 +1,4 @@
-# ESP32 IoT Control System — System Design
+# PlugPilot (ESP32 IoT Control System) — System Design
 
 > บอร์ดเป้าหมาย: **ESP32-DevKitC (ESP32-WROOM-32D, 4 MB flash, ไม่มี PSRAM)**
 > เวอร์ชันเอกสาร: 1.0 · 2026-11-18

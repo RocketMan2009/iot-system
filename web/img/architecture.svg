@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" xml:space="preserve" viewBox="0 0 1200 820" width="1200" height="820" role="img" aria-labelledby="title desc">
-  <title id="title">ESP32 Control Hub — สถาปัตยกรรม MQTT</title>
+  <title id="title">PlugPilot — สถาปัตยกรรม MQTT</title>
   <desc id="desc">Web dashboard and external MQTT apps publish commands to relay/N/set on the MQTT broker; the ESP32 subscribes, drives GPIO to the relay module and publishes relay/N/state, status, info and telemetry back through the broker. USB Web Serial and GitHub Actions/Pages are separate paths that do not use MQTT.</desc>
   <style>
-    svg { --bg:#ffffff; --ink:#1b1f24; --muted:#65707c; --box:#f6f7f9; --border:#d5dae0; --cmd:#c2780a; --st:#15803d; --accent:#0f766e; --side:#8a94a0; }
+    svg { --bg:#ffffff; --ink:#1b1f24; --muted:#65707c; --box:#f6f7f9; --border:#d5dae0; --cmd:#c2780a; --st:#15803d; --accent:#2563d9; --side:#8a94a0; }
     @media (prefers-color-scheme: dark) {
-      svg { --bg:#0e1116; --ink:#e6edf3; --muted:#8b96a3; --box:#161b22; --border:#2f3742; --cmd:#f5b942; --st:#4ade80; --accent:#2dd4bf; --side:#6b7682; }
+      svg { --bg:#0e1116; --ink:#e6edf3; --muted:#8b96a3; --box:#161b22; --border:#2f3742; --cmd:#f5b942; --st:#4ade80; --accent:#6ea8ff; --side:#6b7682; }
     }
     text { font-family: "IBM Plex Sans Thai", "Noto Sans Thai", "Leelawadee UI", Tahoma, sans-serif; fill: var(--ink); font-size: 13px; }
     .mono { font-family: "IBM Plex Mono", Consolas, "Courier New", monospace; font-size: 12px; white-space: pre; }
@@ -35,7 +35,7 @@
   <rect class="bg" x="0" y="0" width="1200" height="820" rx="16"/>
 
   <!-- header -->
-  <text class="title" x="40" y="50">ESP32 Control Hub — สถาปัตยกรรม MQTT</text>
+  <text class="title" x="40" y="50">PlugPilot — สถาปัตยกรรม MQTT</text>
   <text class="muted" x="40" y="74">ตัวอย่าง topic ของบอร์ด ROCKET/esp32-0118d8 · ทุกฝั่งคุยผ่าน broker ไม่มีใครเชื่อมตรงถึงกัน</text>
   <line class="a-cmd" x1="770" y1="45" x2="806" y2="45"/>
   <text x="816" y="50">คำสั่ง (set / cmd)</text>
