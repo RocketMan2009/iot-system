@@ -98,6 +98,34 @@
         </p>
       </div>
 
+      <div class="card sched auto">
+        <div class="card-head">
+          <h2>ควบคุมตามอุณหภูมิ / ความชื้น</h2>
+          <span id="auto-status" class="muted"></span>
+        </div>
+        <div class="sched-head">
+          <label class="row">บอร์ด <select id="auto-device"><option value="">— ยังไม่พบบอร์ด —</option></select></label>
+          <span id="auto-now" class="mono muted"></span>
+        </div>
+        <div id="auto-rows" class="sched-list"><div class="sched-empty">เชื่อมต่อ broker ด้านบน แล้วเลือกบอร์ด</div></div>
+        <div class="actions sched-actions">
+          <button id="auto-add" class="btn" type="button" disabled>+ เพิ่มเงื่อนไข</button>
+          <span class="muted small-note">หรือเริ่มจากตัวอย่าง:</span>
+          <button type="button" class="btn small" data-auto-preset="fan" disabled>🌀 พัดลม (ร้อน &gt; 30 °C)</button>
+          <button type="button" class="btn small" data-auto-preset="heater" disabled>🔥 ฮีตเตอร์ (เย็น &lt; 20 °C)</button>
+          <button type="button" class="btn small" data-auto-preset="dry" disabled>💧 ดูดความชื้น (&gt; 70 %)</button>
+        </div>
+        <div class="actions sched-actions">
+          <button id="auto-save" class="btn primary" type="button" disabled>บันทึกลงบอร์ด</button>
+          <button id="auto-revert" class="btn small" type="button" disabled>ยกเลิกการแก้ไข</button>
+        </div>
+        <p class="muted small-note">
+          เงื่อนไขทำงาน<b>บนบอร์ด ESP32</b> ทุกครั้งที่อ่านเซ็นเซอร์ (15 วินาที) — ปิดเว็บก็ยังทำงาน ·
+          <b>ระยะกันสั่น</b> = ต้องเปลี่ยนเกินเท่านี้ก่อนจะสลับกลับ (กันรีเลย์เปิด-ปิดถี่ ๆ) ·
+          บอร์ดสั่งเฉพาะตอน<b>ข้ามเกณฑ์</b> จึงยังกดเปิด-ปิดเองหรือใช้ตั้งเวลาร่วมได้ · ถ้าเซ็นเซอร์เสีย บอร์ดจะไม่สั่งอะไร
+        </p>
+      </div>
+
       <div class="card monitor">
         <div class="card-head">
           <h2>MQTT Monitor</h2>

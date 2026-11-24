@@ -413,6 +413,13 @@ a.btn { text-decoration: none; display: inline-block; }
 .sensor-bad { display: block; background: var(--warn-bg); color: var(--warn-ink); border-radius: 10px; padding: 8px 10px; font-size: .85rem; }
 @media (max-width: 380px) { .sensor { grid-template-columns: 1fr; } }
 
+/* sensor rules card */
+.auto-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 8px 0 4px; }
+.auto-line select { width: auto; }
+.auto-num { width: 5.5em; }
+.auto .sched-top .pill { margin-left: auto; }
+.auto .sensor-bad { margin-bottom: 8px; }
+
 /* saved Wi-Fi networks (USB tab) */
 .saved-nets { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .saved-nets-head { font-weight: 600; font-size: .9rem; }

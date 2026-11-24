@@ -26,6 +26,7 @@ export function initDashboard() {
   $('mon-form').addEventListener('submit', e => { e.preventDefault(); subscribeMonitor($('mon-filter').value.trim() || '#'); });
   $('mon-clear').addEventListener('click', () => $('mon-log').replaceChildren());
   initSchedule();
+  initAuto();
   setInterval(() => devices.size && render(), 15000);   // refresh "last seen" texts
 
   // Reconnect automatically with the saved settings, so the page is live right after a reload.
@@ -94,7 +95,7 @@ function connect(form) {
     notify('connected');
     $('mqtt-connect').disabled = true;
     $('mqtt-disconnect').disabled = false;
-    c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`, `${base}/+/sensor`], { qos: 1 });
+    c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`, `${base}/+/sensor`, `${base}/+/auto`], { qos: 1 });
     monitorFilter = null;
     subscribeMonitor($('mon-filter').value.trim() || '#');
     render();
@@ -229,8 +230,8 @@ function onMessage(topic, payload, packet) {
   if (!topic.startsWith(`${base}/`)) return;
   const rest = topic.slice(base.length + 1).split('/');   // [id, kind, ...]
   const [id, kind] = rest;
-  if (!['info', 'status', 'telemetry', 'relay', 'schedule', 'sensor'].includes(kind)) return;
-  if ((kind === 'relay' && rest[3] !== 'state') || (kind === 'schedule' && rest.length !== 2)) return;   // commands, not state
+  if (!['info', 'status', 'telemetry', 'relay', 'schedule', 'sensor', 'auto'].includes(kind)) return;
+  if ((kind === 'relay' && rest[3] !== 'state') || ((kind === 'schedule' || kind === 'auto') && rest.length !== 2)) return;   // commands, not state
 
   // empty retained payload = device was "forgotten"
   if (text === '' && (kind === 'info' || kind === 'status')) {
@@ -248,9 +249,15 @@ function onMessage(topic, payload, packet) {
     if (firstSeen) client?.publish(`${base}/${id}/cmd`, 'ping', { qos: 0 });
   } else if (kind === 'status') {
     d.status = text;
+  } else if (kind === 'auto') {
+    let a;
+    try { a = JSON.parse(text); } catch { return; }
+    if (!a.error) d.auto = a;
+    onAutoMessage(id, a);
   } else if (kind === 'sensor') {
     try { d.sensor = JSON.parse(text); } catch { return; }
     if (d.sensor.ok && Number.isFinite(d.sensor.t)) recordSensor(id, d.sensor, packet?.retain);
+    if (id === autoId) renderAutoNow();
   } else if (kind === 'telemetry') {
     try { d.telemetry = JSON.parse(text); } catch { return; }
     if (id === schedId) renderClock();
@@ -427,6 +434,7 @@ function ago(ts) {
 function render() {
   $('mqtt-diag')?.replaceChildren(...[connectionDiag()].filter(Boolean));
   syncScheduleDevices();
+  syncAutoDevices();
   if (client?.connected) notify('connected');
   const wrap = $('devices');
   $('device-count').textContent = `${devices.size} บอร์ด`;
@@ -850,6 +858,217 @@ function saveSchedule() {
     updateScheduleButtons();
   }, 5000);
   updateScheduleButtons();
+}
+
+// ---------- sensor rules: relay follows temperature / humidity (run on the board) ----------
+// Board format: { ch, s: "t"|"h", op: ">"|"<", v, hy, en }. ">" = ON above v, OFF at v - hy; "<" = ON below v, OFF at v + hy.
+const AUTO_MAX = 8;
+const SENS = { t: { name: 'อุณหภูมิ', unit: '°C', hy: 0.5, min: -40, max: 125, step: 0.5 }, h: { name: 'ความชื้น', unit: '%RH', hy: 2, min: 0, max: 100, step: 1 } };
+const AUTO_PRESETS = {
+  fan: { s: 't', op: '>', v: 30, hy: 1 },
+  heater: { s: 't', op: '<', v: 20, hy: 1 },
+  dry: { s: 'h', op: '>', v: 70, hy: 5 },
+};
+let autoId = '';
+let autoDraft = [];
+let autoDirty = false;
+let autoSaveTimer = null;
+
+const autoSupported = d => !!d?.info?.auto_max;
+const fmt1 = x => (Math.round(x * 10) / 10).toFixed(1).replace(/\.0$/, '');
+
+function autoChLabel(ch) {
+  const n = names[`${autoId}/${ch}`];
+  const gpio = devices.get(autoId)?.info?.relays?.find(r => r.ch === ch)?.gpio;
+  return `CH${ch}${n ? ` “${n}”` : ''}${gpio != null ? ` (GPIO${gpio})` : ''}`;
+}
+
+function autoSentence(r) {
+  const S = SENS[r.s];
+  if (!Number.isFinite(r.v)) return 'ใส่ค่าเกณฑ์';
+  const back = r.op === '>' ? r.v - r.hy : r.v + r.hy;
+  return `เปิด ${autoChLabel(r.ch)} เมื่อ${S.name}${r.op === '>' ? 'สูงกว่า' : 'ต่ำกว่า'} ${fmt1(r.v)} ${S.unit} · ` +
+    `ปิดเมื่อ${r.op === '>' ? 'ลดลงถึง' : 'ขึ้นถึง'} ${fmt1(back)} ${S.unit}`;
+}
+
+function initAuto() {
+  $('auto-device').addEventListener('change', e => {
+    if (autoDirty && !confirm('ยังไม่ได้บันทึกการแก้ไข — ทิ้งการแก้ไขแล้วเปลี่ยนบอร์ด?')) { e.target.value = autoId; return; }
+    selectAutoDevice(e.target.value);
+  });
+  const add = preset => {
+    const used = new Set(autoDraft.map(r => r.ch));
+    const relays = devices.get(autoId)?.info?.relays || [{ ch: 1 }];
+    const ch = (relays.find(x => !used.has(x.ch)) || relays[0]).ch;
+    autoDraft.push({ ch, s: 't', op: '>', v: 30, hy: SENS.t.hy, en: true, ...preset });
+    markAutoDirty();
+    renderAutoRows();
+    $('auto-rows').lastElementChild?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+  $('auto-add').addEventListener('click', () => add({}));
+  document.querySelectorAll('[data-auto-preset]').forEach(b => b.addEventListener('click', () => add(AUTO_PRESETS[b.dataset.autoPreset])));
+  $('auto-save').addEventListener('click', saveAuto);
+  $('auto-revert').addEventListener('click', () => selectAutoDevice(autoId));
+  window.addEventListener('beforeunload', e => { if (autoDirty) e.preventDefault(); });
+}
+
+function syncAutoDevices() {
+  const sel = $('auto-device');
+  const ids = [...devices.keys()].sort();
+  const current = [...sel.options].map(o => o.value).filter(Boolean);
+  if (ids.join() !== current.join()) {
+    sel.replaceChildren(...(ids.length
+      ? ids.map(id => el('option', { value: id }, id))
+      : [el('option', { value: '' }, '— ยังไม่พบบอร์ด —')]));
+    if (!ids.includes(autoId)) { autoDirty = false; autoId = ''; }
+    sel.value = autoId || ids[0] || '';
+    if (!autoId && ids[0]) selectAutoDevice(ids[0]);
+  }
+  const d = devices.get(autoId);
+  const key = `${autoSupported(d)}|${!!d?.sensor?.ok}`;
+  if (!d) renderAutoRows();
+  else if (!autoDirty && $('auto-rows').dataset.key !== key) renderAutoRows();
+  updateAutoButtons();
+  renderAutoNow();
+}
+
+function selectAutoDevice(id) {
+  autoId = id;
+  autoDirty = false;
+  autoDraft = (devices.get(id)?.auto?.rules || []).map(r => ({ ...r, v: Number(r.v), hy: Number(r.hy) }));
+  renderAutoRows();
+  renderAutoNow();
+}
+
+function onAutoMessage(id, a) {
+  if (id !== autoId) return;
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+    if (a.error) { toast(`บอร์ดไม่รับเงื่อนไข: ${a.error}`, 6000); updateAutoButtons(); return; }
+    toast('บันทึกเงื่อนไขลงบอร์ดแล้ว ✔');
+    autoDirty = false;
+  }
+  if (a.error) return;
+  if (!autoDirty) selectAutoDevice(id);
+}
+
+function markAutoDirty() {
+  autoDirty = true;
+  updateAutoButtons();
+}
+
+function updateAutoButtons() {
+  const ok = !!client?.connected && autoSupported(devices.get(autoId));
+  $('auto-add').disabled = !ok || autoDraft.length >= AUTO_MAX;
+  document.querySelectorAll('[data-auto-preset]').forEach(b => { b.disabled = $('auto-add').disabled; });
+  $('auto-save').disabled = !ok || !autoDirty || !!autoSaveTimer;
+  $('auto-revert').disabled = !autoDirty;
+  $('auto-status').replaceChildren(autoDirty ? el('span', { class: 'dirty-dot' }, '● ยังไม่ได้บันทึก — กด “บันทึกลงบอร์ด”') : '');
+}
+
+function renderAutoNow() {
+  const s = devices.get(autoId)?.sensor;
+  $('auto-now').textContent = !s ? '' : s.ok ? `ตอนนี้ 🌡 ${s.t.toFixed(1)} °C · 💧 ${s.h.toFixed(1)} %RH` : '⚠ เซ็นเซอร์ไม่ตอบ';
+}
+
+function renderAutoRows() {
+  const list = $('auto-rows');
+  const d = devices.get(autoId);
+  list.dataset.key = `${autoSupported(d)}|${!!d?.sensor?.ok}`;
+  updateAutoButtons();
+  const message = (...c) => list.replaceChildren(el('div', { class: 'sched-empty' }, ...c));
+  if (!d) return list.replaceChildren(noBoardHelp());
+  if (!autoSupported(d))
+    return message(`เฟิร์มแวร์บนบอร์ดนี้ (v${d.info?.fw || '?'}) ยังไม่รองรับ — ไปแท็บ “แฟลชเฟิร์มแวร์” แล้วกด “แฟลชเลย”`);
+
+  const warn = !d.sensor?.ok
+    ? el('div', { class: 'sensor-bad' }, '⚠ ยังไม่มีค่าจากเซ็นเซอร์ SHT31 บนบอร์ดนี้ — ตั้งเงื่อนไขไว้ได้ แต่จะเริ่มทำงานเมื่อต่อเซ็นเซอร์ (VIN→3V3, GND, SCL→GPIO22, SDA→GPIO21)')
+    : null;
+  if (!autoDraft.length) return message(warn, 'ยังไม่มีเงื่อนไข — กด “+ เพิ่มเงื่อนไข” หรือเลือกจากตัวอย่าง');
+
+  const relays = d.info?.relays?.length ? d.info.relays : [{ ch: 1 }];
+  const states = !autoDirty ? d.auto?.state || [] : [];
+  const dupCh = new Set(autoDraft.filter((r, i) => r.en !== false && autoDraft.findIndex(x => x.en !== false && x.ch === r.ch) !== i).map(r => r.ch));
+
+  list.replaceChildren(...(warn ? [warn] : []), ...autoDraft.map((r, i) => {
+    const text = el('p', { class: 'sched-sentence' });
+    const unitA = el('span', { class: 'muted' });
+    const unitB = el('span', { class: 'muted' });
+    const refresh = () => {
+      text.textContent = autoSentence(r);
+      unitA.textContent = unitB.textContent = SENS[r.s].unit;
+    };
+    const update = patch => { Object.assign(r, patch); markAutoDirty(); refresh(); };
+
+    const chSel = el('select', { 'aria-label': 'ช่องรีเลย์', onchange: e => update({ ch: Number(e.target.value) }) },
+      relays.map(x => el('option', { value: x.ch }, autoChLabel(x.ch))));
+    chSel.value = r.ch;
+    const num = (key, attrs) => {
+      const input = el('input', { type: 'number', inputmode: 'decimal', class: 'auto-num', value: r[key], ...attrs,
+        onchange: e => {
+          const v = parseFloat(e.target.value);
+          if (!Number.isFinite(v)) { e.target.value = r[key]; return toast('ใส่ตัวเลข'); }
+          update({ [key]: v });
+        } });
+      return input;
+    };
+    const vIn = num('v', { 'aria-label': 'ค่าเกณฑ์', step: SENS[r.s].step });
+    const hyIn = num('hy', { 'aria-label': 'ระยะกันสั่น', min: 0, max: 20, step: r.s === 't' ? 0.5 : 1 });
+    const sSel = el('select', { 'aria-label': 'ค่าที่ใช้', onchange: e => {
+      const s = e.target.value;
+      const v = s === 'h' ? 70 : 30;
+      vIn.value = v; hyIn.value = SENS[s].hy;
+      update({ s, v, hy: SENS[s].hy });
+    } }, el('option', { value: 't' }, '🌡 อุณหภูมิ'), el('option', { value: 'h' }, '💧 ความชื้น'));
+    sSel.value = r.s;
+    const opSel = el('select', { 'aria-label': 'สูงกว่าหรือต่ำกว่า', onchange: e => update({ op: e.target.value }) },
+      el('option', { value: '>' }, 'สูงกว่า'), el('option', { value: '<' }, 'ต่ำกว่า'));
+    opSel.value = r.op;
+
+    const en = el('input', { type: 'checkbox', onchange: e => { update({ en: e.target.checked }); item.classList.toggle('disabled', !e.target.checked); } });
+    en.checked = r.en !== false;
+    const st = states[i];
+    const chip = autoDirty || r.en === false ? null
+      : st === 1 ? el('span', { class: 'pill on' }, '● กำลังเปิดตามเงื่อนไข')
+      : st === 0 ? el('span', { class: 'pill off' }, '○ ปิดตามเงื่อนไข')
+      : el('span', { class: 'pill off' }, d.sensor?.ok ? 'รอข้ามเกณฑ์' : 'รอเซ็นเซอร์');
+
+    const item = el('div', { class: `sched-item${r.en === false ? ' disabled' : ''}` },
+      el('div', { class: 'sched-top' },
+        el('label', { class: 'check' }, en, 'ใช้งาน'),
+        chSel,
+        chip,
+        el('button', {
+          type: 'button', class: 'btn small danger', title: 'ลบเงื่อนไขนี้',
+          onclick: () => { autoDraft.splice(i, 1); markAutoDirty(); renderAutoRows(); },
+        }, '✕ ลบ')),
+      el('div', { class: 'auto-line' },
+        el('span', {}, 'เปิดเมื่อ'), sSel, opSel, vIn, unitA,
+        el('span', { class: 'muted', title: 'ต้องเปลี่ยนเกินเท่านี้ก่อนจะสลับกลับ' }, '· ระยะกันสั่น'), hyIn, unitB),
+      dupCh.has(r.ch) ? el('p', { class: 'field-note warn' }, `⚠ มีหลายเงื่อนไขสั่ง CH${r.ch} — อาจสั่งขัดกัน`) : null,
+      text,
+    );
+    refresh();
+    return item;
+  }));
+}
+
+function saveAuto() {
+  if (!client?.connected) return toast('ยังไม่ได้เชื่อมต่อ broker');
+  for (const [i, r] of autoDraft.entries()) {
+    const S = SENS[r.s];
+    if (!(r.v >= S.min && r.v <= S.max)) return toast(`เงื่อนไขที่ ${i + 1}: ค่าเกณฑ์ต้องอยู่ระหว่าง ${S.min}–${S.max} ${S.unit}`);
+    if (!(r.hy >= 0 && r.hy <= 20)) return toast(`เงื่อนไขที่ ${i + 1}: ระยะกันสั่นต้องอยู่ระหว่าง 0–20`);
+  }
+  const rules = autoDraft.map(({ ch, s, op, v, hy, en }) => ({ ch, s, op, v, hy, en: en !== false }));
+  client.publish(`${base}/${autoId}/auto/set`, JSON.stringify(rules), { qos: 1 });
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null;
+    toast('บอร์ดไม่ตอบภายใน 5 วินาที — ตรวจว่าบอร์ดออนไลน์และใช้เฟิร์มแวร์ล่าสุด', 6000);
+    updateAutoButtons();
+  }, 5000);
+  updateAutoButtons();
 }
 
 // ---------- API for the setup wizard ----------
