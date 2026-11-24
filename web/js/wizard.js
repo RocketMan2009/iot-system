@@ -103,6 +103,13 @@ const status = () => el('div', { class: 'wz-status', role: 'status' });
 function setStatus(node, kind, text) { node.className = `wz-status ${kind}`; node.textContent = text; }
 const field = (label, input, hint) => el('label', { class: 'wz-field' }, el('span', {}, label), input, hint ? el('small', { class: 'muted' }, hint) : null);
 const ext = (href, text) => el('a', { class: 'btn', href, target: '_blank', rel: 'noopener' }, text, ' ↗');
+// How to move the board to another place later (firmware with phone setup only).
+const apCard = info => (info?.ap_ssid
+  ? tip(el('b', {}, '📱 ย้ายบอร์ดไปใช้ที่อื่น ไม่ต้องใช้สาย USB: '),
+      'บอร์ดจำ Wi-Fi ได้ 5 แห่งและเลือกต่อเอง ถ้าไปที่ที่ไม่รู้จัก รอ 1 นาที (หรือกดปุ่ม BOOT สั้นๆ) ',
+      'แล้วใช้มือถือต่อ Wi-Fi ', el('b', {}, info.ap_ssid), ' รหัส ', el('b', {}, info.ap_pass),
+      ' — หน้าตั้งค่าจะเด้งขึ้นมาให้เลือก Wi-Fi ใหม่ · แนะนำให้เขียนชื่อและรหัสนี้ติดไว้ที่กล่อง')
+  : null);
 
 // ---------- steps ----------
 const BODY = {
@@ -301,8 +308,10 @@ const BODY = {
         wifi_ssid: name, mqtt_host: st.host, mqtt_port: 8883, mqtt_tls: true,
         mqtt_user: st.boardUser, mqtt_pass: boardPass, base: st.base,
       };
+      if (pass.value && pass.value.length < 8) return setStatus(out, 'bad', 'รหัส Wi-Fi ต้องยาว 8 ตัวขึ้นไป (หรือเว้นว่างถ้าไม่มีรหัส)');
       if (pass.value) cfg.wifi_pass = pass.value;
-      else if (!(info?.has_wifi_pass && info.wifi_ssid === name)) cfg.wifi_pass = '';   // open network
+      else if (!info?.wifi_networks && !(info?.has_wifi_pass && info.wifi_ssid === name)) cfg.wifi_pass = '';   // open network
+      // (multi-network firmware: no wifi_pass = keep the password saved for this name, or none for a new one)
       if (info?.safe_pins) cfg.relay_pins = st.pins || getPins();
       sendBtn.disabled = true;
       setStatus(out, 'wait', 'กำลังส่งค่า… บอร์ดจะรีสตาร์ต (ประมาณ 10–30 วินาที)');
@@ -339,6 +348,7 @@ const BODY = {
       el('div', { class: 'wz-actions' }, sendBtn),
       checks, out,
       isDone('wifi') ? tip('✔ ขั้นนี้เสร็จแล้ว — กด “ไปขั้นต่อไป” แล้วถอดสาย USB ออกได้เลย') : null,
+      apCard(getBoardInfo()),
     );
   },
 

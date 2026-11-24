@@ -208,7 +208,8 @@ function showInfo(info) {
     ['Firmware', info.fw],
     ['MAC', info.mac],
     ['Device ID', info.device_id],
-    ['Wi-Fi', `${info.wifi}${info.ip ? ` · ${info.ip} · ${info.rssi} dBm` : ''}`],
+    ['Wi-Fi', `${WIFI_STATE[info.wifi] || info.wifi}${info.wifi === 'connected' && info.wifi_ssid ? ` “${info.wifi_ssid}”` : ''}${info.ip ? ` · ${info.ip} · ${info.rssi} dBm` : ''}`],
+    ...(info.ap_ssid ? [['ตั้งค่าผ่านมือถือ', `Wi-Fi “${info.ap_ssid}” · รหัส ${info.ap_pass}${info.portal ? ' · เปิดอยู่' : ''}`]] : []),
     ['MQTT', info.mqtt_host ? `${info.mqtt_host}:${info.mqtt_port} · ${info.mqtt ? 'connected' : 'not connected'}` : 'ยังไม่ตั้งค่า'],
   ];
   $('prov-info').replaceChildren(...rows.flatMap(([k, v]) => [el('dt', {}, k), el('dd', { 'data-k': k }, String(v))]));
@@ -234,6 +235,64 @@ function showInfo(info) {
 
   renderPinMap(info);
   syncPicker(info);
+  renderSavedNets(info);
+}
+
+const WIFI_STATE = {
+  connected: 'connected',
+  portal: 'โหมดตั้งค่าผ่านมือถือ',
+  unconfigured: 'ยังไม่ได้ตั้งค่า',
+  auth_failed: 'รหัสผ่านผิด',
+  ssid_not_found: 'หา Wi-Fi ไม่เจอ',
+  connect_failed: 'ต่อไม่สำเร็จ',
+  connecting: 'กำลังเชื่อมต่อ…',
+};
+
+// ---------- saved Wi-Fi networks (firmware with multi-network support) ----------
+function renderSavedNets(info) {
+  const box = $('prov-nets');
+  const list = info.wifi_networks;
+  box.hidden = !Array.isArray(list);
+  if (box.hidden) return;
+  const inUse = info.wifi === 'connected' ? info.wifi_ssid : null;
+  const wifiCmd = async (obj, logAs, okMsg) => {
+    try {
+      const res = await request(obj, 3000, logAs);
+      if (!res.ok) throw new Error(res.error || 'error');
+      toast(okMsg);
+      await refreshInfo(1);
+    } catch (err) { toast(`ไม่สำเร็จ: ${err.message}`, 5000); }
+  };
+  const forget = ssid => () => {
+    if (!confirm(`ลบ “${ssid}” ออกจากบอร์ด?${ssid === inUse ? '\n(กำลังใช้อยู่ — บอร์ดจะยังต่ออยู่จนกว่าจะหลุด)' : ''}`)) return;
+    wifiCmd({ cmd: 'wifi_forget', ssid }, undefined, `ลบ “${ssid}” แล้ว`);
+  };
+  const addBackup = () => {
+    const f = $('prov-form').elements;
+    const ssid = f.wifi_ssid.value.trim();
+    if (!ssid) return toast('พิมพ์หรือเลือกชื่อ Wi-Fi ในช่อง SSID ก่อน');
+    if (f.wifi_pass.value && f.wifi_pass.value.length < 8) return toast('รหัส Wi-Fi ต้องยาว 8 ตัวขึ้นไป (หรือเว้นว่างถ้าไม่มีรหัส)');
+    const obj = { cmd: 'wifi_add', ssid };
+    if (f.wifi_pass.value || !list.includes(ssid)) obj.pass = f.wifi_pass.value;
+    wifiCmd(obj, { ...obj, ...(obj.pass ? { pass: '***' } : {}) }, `เพิ่ม “${ssid}” แล้ว — บอร์ดจะใช้เมื่ออยู่ในที่ที่มี Wi-Fi นี้`);
+  };
+  const portal = () => wifiCmd({ cmd: 'portal' }, undefined,`เปิด Wi-Fi “${info.ap_ssid}” แล้ว — ใช้มือถือเชื่อมต่อ (รหัส ${info.ap_pass})`);
+
+  box.replaceChildren(
+    el('div', { class: 'saved-nets-head' }, `Wi-Fi ที่บอร์ดจำไว้ (${list.length}/${info.wifi_max || 5})`),
+    list.length
+      ? el('ul', {}, ...list.map(s => el('li', {},
+          el('span', {}, s, s === inUse ? el('span', { class: 'pill on' }, 'กำลังใช้') : null),
+          el('button', { type: 'button', class: 'btn small', title: 'ลบออกจากบอร์ด', onclick: forget(s) }, 'ลบ'))))
+      : el('p', { class: 'muted' }, 'ยังไม่มี'),
+    el('div', { class: 'row' },
+      el('button', { type: 'button', class: 'btn small', onclick: addBackup }, '＋ เพิ่ม SSID ด้านบนเป็น Wi-Fi สำรอง'),
+      info.ap_ssid ? el('button', { type: 'button', class: 'btn small', onclick: portal, disabled: !!info.portal }, '📱 เปิดตั้งค่าผ่านมือถือ') : null),
+    el('p', { class: 'field-note' },
+      'บอร์ดจะต่อ Wi-Fi ที่รู้จักและสัญญาณแรงที่สุดให้เอง — เพิ่ม Wi-Fi ของบ้าน ออฟฟิศ หรือ Hotspot มือถือไว้ล่วงหน้าได้ (ไม่รีบูต) · ',
+      'ไปที่ใหม่ที่ไม่รู้จัก: รอ 1 นาทีหรือกดปุ่ม BOOT สั้นๆ แล้วใช้มือถือต่อ Wi-Fi ',
+      el('b', {}, info.ap_ssid || 'PlugPilot-xxxxxx'), info.ap_pass ? ` (รหัส ${info.ap_pass})` : ''),
+  );
 }
 
 // ---------- outdated firmware warning ----------
@@ -310,7 +369,7 @@ async function scan() {
       .filter(n => n.ssid)
       .sort((a, b) => b.rssi - a.rssi)
       .filter((n, i, arr) => arr.findIndex(x => x.ssid === n.ssid) === i);
-    $('ssid-list').replaceChildren(...nets.map(n => el('option', { value: n.ssid }, `${n.rssi} dBm${n.secure ? ' 🔒' : ''}`)));
+    $('ssid-list').replaceChildren(...nets.map(n => el('option', { value: n.ssid }, `${n.rssi} dBm${n.secure ? ' 🔒' : ''}${n.saved ? ' · จำไว้แล้ว' : ''}`)));
     toast(`พบ ${nets.length} เครือข่าย — คลิกช่อง SSID เพื่อเลือก`);
     $('prov-form').elements.wifi_ssid.focus();
   } catch (err) {

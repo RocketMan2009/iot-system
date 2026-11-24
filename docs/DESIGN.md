@@ -131,18 +131,35 @@ Discovery: เว็บ subscribe `<base>/+/info` และ `<base>/+/status` �
 | `{"cmd":"set_schedule","rules":[…]}` | `{"ok":true,"type":"set_schedule","count":N}` |
 | `{"cmd":"relay","ch":1,"state":"TOGGLE"}` | `{"ok":true,"type":"relay","ch":1,"state":"ON"}` (ทดสอบสายไฟก่อนติดตั้ง) |
 | `{"cmd":"reboot"}` / `{"cmd":"factory_reset"}` | `{"ok":true,...}` |
+| `{"cmd":"wifi_add","ssid":"Office","pass":"…"}` | `{"ok":true,"type":"wifi_add","networks":["Office","Home"]}` — เพิ่ม Wi-Fi สำรองโดยไม่รีบูต (ไม่ส่ง `pass` = ใช้รหัสเดิมของชื่อนี้) |
+| `{"cmd":"wifi_forget","ssid":"Office"}` | `{"ok":true,"type":"wifi_forget","networks":[…]}` |
+| `{"cmd":"portal"}` | `{"ok":true,"type":"portal","ap_ssid":"PlugPilot-xxxxxx"}` — เปิดโหมดตั้งค่าผ่านมือถือทันที |
 
 - รหัสผ่านถูกเขียนลง NVS แต่ **ไม่เคยถูกส่งกลับ** ใน `info` (ส่งแค่ `has_wifi_pass:true`)
 - ฟิลด์ที่ไม่ส่งมาใน `set_config` = คงค่าเดิม (partial update) — เปลี่ยนแค่ broker ได้โดยไม่ต้องกรอก Wi-Fi ใหม่
+- `info` (fw ≥ 1.0.x รุ่น multi Wi-Fi) เพิ่ม `wifi_networks` (ชื่อเท่านั้น), `wifi_max`, `ap_ssid`, `ap_pass`, `portal`;
+  `wifi` เป็น `connected` / `portal` / `unconfigured` / `auth_failed` / `ssid_not_found` / `connect_failed` / `connecting`
+  (สถานะผิดพลาดหมายถึงเครือข่ายล่าสุดที่เพิ่งตั้ง) · `ap_pass` ส่งทาง USB เท่านั้น ไม่เคยส่งผ่าน MQTT
+
+### 3.2.1 หลาย Wi-Fi + ตั้งค่าผ่านมือถือ
+
+- บอร์ดจำได้ **5 เครือข่าย** (NVS namespace `wifi`) — สแกนแล้วต่อเครือข่ายที่รู้จักซึ่งสัญญาณแรงสุดก่อน แล้วไล่ตัวที่ไม่เห็นในการสแกน (Wi-Fi ซ่อน)
+  `set_config` ที่มี `wifi_ssid` = เพิ่ม/ย้ายไปหน้าสุด ไม่ลบเครือข่ายอื่น · เฟิร์มแวร์รุ่นเก่าที่มี Wi-Fi เดียวถูกย้ายเข้ารายการอัตโนมัติ
+- **โหมดตั้งค่าผ่านมือถือ (captive portal):** บอร์ดเปิด Wi-Fi `PlugPilot-<6 หลักท้าย MAC>` (WPA2, รหัส 8 หลักสุ่มครั้งแรก เก็บใน namespace `sys` — factory reset ไม่เปลี่ยน จึงเขียนติดกล่องได้)
+  เมื่อ ① ยังไม่มี Wi-Fi ที่บันทึกไว้ ② ต่อไม่ได้ติดต่อกัน 60 วินาที ③ กดปุ่ม BOOT สั้นๆ ④ คำสั่ง `portal` ทาง USB
+- มือถือต่อแล้ว DNS ทุกชื่อชี้ไป 192.168.4.1 → หน้า sign-in เด้งเอง → เลือก Wi-Fi + รหัส → บอร์ด **ทดสอบต่อจริงก่อนบันทึก** (≤ 20 วินาที) แจ้งผลรหัสผิด/หาไม่เจอ
+- ปิดโหมดเองเมื่อ: ต่อสำเร็จ (15 วินาทีหลังแจ้งผล), ไม่มีมือถือต่อ 3 นาที, หรือสแกนพบ Wi-Fi ที่บันทึกไว้กลับมา (เช่น เราเตอร์เพิ่งบูตเสร็จหลังไฟดับ)
+- ระหว่างนี้รีเลย์คงสถานะ ตารางเวลายังทำงานถ้าบอร์ดเคยได้เวลาจาก NTP หลังเปิดเครื่อง · หน้า portal ตั้งได้เฉพาะ Wi-Fi (MQTT ต้องตั้งทาง USB)
+- ใช้ไม่ได้กับ Wi-Fi ที่ต้องล็อกอินผ่านหน้าเว็บ (โรงแรม/ห้าง) และ WPA2-Enterprise → ใช้ Hotspot มือถือแทน
 
 ### 3.3 Firmware Design (Arduino-ESP32 บน PlatformIO)
 
 ```
 setup():  load NVS → init relays (restore saved mask, ก่อนเปิด Wi-Fi) → WiFi.begin
 loop():   serialTask()  ─ อ่าน JSON line, ไม่ block
-          wifiTask()    ─ state machine + backoff 1s→30s
+          wifiTask()    ─ state machine: scan → ลองทีละเครือข่าย → backoff 5s→60s → portal หลัง 60s
           mqttTask()    ─ reconnect backoff, client.loop()
-          buttonTask()  ─ GPIO0 ค้าง 5s → factory reset
+          buttonTask()  ─ GPIO0 กดสั้น → ตั้งค่าผ่านมือถือ, ค้าง 5s → factory reset
           telemetryTask() ทุก 30s
           esp_task_wdt_reset()
 ```

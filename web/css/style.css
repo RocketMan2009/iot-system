@@ -390,6 +390,15 @@ a.btn { text-decoration: none; display: inline-block; }
 .field-note.warn { color: var(--danger); }
 @media (max-width: 560px) { .host-row { flex-wrap: wrap; } .host-row select { flex-basis: 100%; } }
 
+/* saved Wi-Fi networks (USB tab) */
+.saved-nets { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.saved-nets-head { font-weight: 600; font-size: .9rem; }
+.saved-nets ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.saved-nets li { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: .9rem; overflow-wrap: anywhere; }
+.saved-nets li .pill { margin-left: 8px; }
+.saved-nets .row { flex-wrap: wrap; }
+.saved-nets p { margin: 0; }
+
 /* brand wordmark in the header */
 .brand h1 { font-size: 1.35rem; letter-spacing: -.3px; }
 .brand h1 .b-plug { color: var(--brand-navy); }

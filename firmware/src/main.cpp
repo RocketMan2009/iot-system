@@ -5,6 +5,9 @@
  *  - On-board schedules (time + weekdays -> ON/OFF), local time from NTP + POSIX timezone
  *  - MQTT: status (LWT), info, relay/<n>/set|state, schedule[/set], telemetry, cmd
  *  - USB provisioning: newline-delimited JSON on UART0 @115200 (see docs/DESIGN.md §3.2)
+ *  - Up to 5 saved Wi-Fi networks; joins the strongest known one
+ *  - Phone setup (captive portal): own Wi-Fi "PlugPilot-xxxxxx" opens when no saved network is
+ *    reachable for 60 s, when nothing is saved yet, or on a short press of BOOT
  *  - Hold BOOT (GPIO0) for 5 s => factory reset
  *  - Task watchdog 15 s
  *  - MQTT over TLS (port 8883) for cloud brokers, CA roots in ca_bundle.h
@@ -18,7 +21,10 @@
 #include <esp_task_wdt.h>
 #include <esp_system.h>
 #include <time.h>
+#include <WebServer.h>
+#include <DNSServer.h>
 #include "ca_bundle.h"
+#include "portal_html.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION "1.0.0-local"
@@ -35,10 +41,14 @@ static const uint32_t FACTORY_RESET_HOLD_MS = 5000;
 static const uint32_t TELEMETRY_INTERVAL_MS = 30000;
 static const uint32_t WDT_TIMEOUT_S = 15;
 static const time_t CLOCK_VALID_AFTER = 1700000000;   // 2023-11: anything earlier = NTP not synced yet
+static const uint8_t MAX_NETS = 5;                    // saved Wi-Fi networks
+static const uint32_t PORTAL_AFTER_MS = 60000;        // offline this long => open phone setup
+static const uint32_t PORTAL_IDLE_MS = 180000;        // close phone setup after 3 min with no phone on it
+static const uint32_t WIFI_TRY_MS = 12000;            // per network attempt
+static const uint32_t PORTAL_TEST_MS = 20000;         // phone setup: test a new network this long
 
 // ---------- Config (NVS namespace "cfg") ----------
 struct Config {
-  String wifiSsid, wifiPass;
   String mqttHost, mqttUser, mqttPass;
   uint16_t mqttPort = 1883;
   bool mqttTls = false;       // MQTTS (cloud brokers such as HiveMQ Cloud / EMQX)
@@ -115,8 +125,6 @@ static int parsePins(JsonVariantConst v, uint8_t* out, const char** err) {
 
 static void loadConfig() {
   prefs.begin("cfg", true);
-  cfg.wifiSsid = prefs.getString("wifi_ssid", "");
-  cfg.wifiPass = prefs.getString("wifi_pass", "");
   cfg.mqttHost = prefs.getString("mqtt_host", "");
   cfg.mqttPort = prefs.getUShort("mqtt_port", 1883);
   cfg.mqttTls = prefs.getBool("mqtt_tls", cfg.mqttPort == 8883);
@@ -153,7 +161,7 @@ static void loadConfig() {
 
 static void factoryReset() {
   Serial.println("# factory reset: clearing NVS");
-  for (const char* ns : {"cfg", "relay", "sched"}) { prefs.begin(ns, false); prefs.clear(); prefs.end(); }
+  for (const char* ns : {"cfg", "relay", "sched", "wifi"}) { prefs.begin(ns, false); prefs.clear(); prefs.end(); }
   delay(200);
   ESP.restart();
 }
@@ -332,32 +340,392 @@ static void scheduleTask() {
   }
 }
 
-// ---------- Wi-Fi (non-blocking with backoff) ----------
-uint32_t wifiNextAttempt = 0, wifiBackoff = 1000;
-bool wifiWasConnected = false;
+// ---------- Saved Wi-Fi networks (NVS namespace "wifi": n, s0..s4, p0..p4) ----------
+// nets[0] is the most recently added/used one. Passwords never leave the board.
+struct Net { String ssid, pass; };
+Net nets[MAX_NETS];
+uint8_t netCount = 0;
 
-static void wifiTask() {
-  if (cfg.wifiSsid.isEmpty()) return;  // provisioning mode
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!wifiWasConnected) {
-      wifiWasConnected = true;
-      wifiBackoff = 1000;
-      Serial.printf("# wifi connected, ip=%s rssi=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
-      // NTP: needed for TLS certificate checks and for schedules (local time via cfg.tz)
-      configTzTime(cfg.tz.c_str(), "pool.ntp.org", "time.google.com");
-    }
+static void saveNets() {
+  prefs.begin("wifi", false);
+  prefs.clear();
+  prefs.putUChar("n", netCount);
+  for (uint8_t i = 0; i < netCount; i++) {
+    prefs.putString(("s" + String(i)).c_str(), nets[i].ssid);
+    prefs.putString(("p" + String(i)).c_str(), nets[i].pass);
+  }
+  prefs.end();
+}
+
+static void loadNets() {
+  prefs.begin("wifi", true);
+  bool have = prefs.isKey("n");
+  netCount = std::min<uint8_t>(prefs.getUChar("n", 0), MAX_NETS);
+  for (uint8_t i = 0; i < netCount; i++) {
+    nets[i].ssid = prefs.getString(("s" + String(i)).c_str(), "");
+    nets[i].pass = prefs.getString(("p" + String(i)).c_str(), "");
+  }
+  prefs.end();
+  if (have) return;
+  // First boot after firmware <= 1.0.x: import its single network (keys left in place for downgrades).
+  prefs.begin("cfg", true);
+  String s = prefs.isKey("wifi_ssid") ? prefs.getString("wifi_ssid", "") : String();
+  String p = prefs.isKey("wifi_pass") ? prefs.getString("wifi_pass", "") : String();
+  prefs.end();
+  if (s.length()) { nets[0] = {s, p}; netCount = 1; }
+  saveNets();
+}
+
+static int findNet(const String& ssid) {
+  for (uint8_t i = 0; i < netCount; i++) if (nets[i].ssid == ssid) return i;
+  return -1;
+}
+
+// Adds or updates a network and moves it to the front. pass == nullptr keeps the saved password.
+static void rememberNet(const String& ssid, const String* pass) {
+  int found = findNet(ssid);
+  String p = pass ? *pass : (found >= 0 ? nets[found].pass : String());
+  int last = found >= 0 ? found : std::min<int>(netCount, MAX_NETS - 1);
+  if (found < 0 && netCount < MAX_NETS) netCount++;
+  for (int k = last; k > 0; k--) nets[k] = nets[k - 1];   // oldest drops off when full
+  nets[0] = {ssid, p};
+  saveNets();
+  Serial.printf("# wifi saved '%s' (%u network(s))\n", ssid.c_str(), netCount);
+}
+
+static bool forgetNet(const String& ssid) {
+  int found = findNet(ssid);
+  if (found < 0) return false;
+  for (int k = found; k < netCount - 1; k++) nets[k] = nets[k + 1];
+  nets[--netCount] = Net();
+  saveNets();
+  Serial.printf("# wifi forgot '%s' (%u network(s) left)\n", ssid.c_str(), netCount);
+  return true;
+}
+
+// ---------- Wi-Fi connection manager (non-blocking) ----------
+// Idle -> Scanning -> Trying (each known network, strongest first) -> Up
+//                          \-> Waiting (backoff) -> Scanning ... -> Portal after 60 s offline
+enum class WS : uint8_t { Idle, Scanning, Trying, Waiting, Up, Portal };
+WS ws = WS::Idle;
+uint8_t cand[MAX_NETS], candCount = 0, candIdx = 0;
+uint32_t wsDeadline = 0, wifiBackoff = 5000, offlineSince = 0;
+String trySsid;
+int16_t firstReason = 0;          // last failure of nets[0] (the one just configured): reason code, -1 = timeout
+volatile uint8_t discReason = 0;  // last STA disconnect reason from the Wi-Fi driver
+volatile bool discFlag = false;
+
+// Last scan, de-duplicated and sorted by signal; shared by the connection manager, USB "scan" and phone setup.
+struct Seen { String ssid; int8_t rssi; bool lock; };
+static const uint8_t MAX_SEEN = 20;
+Seen seen[MAX_SEEN];
+uint8_t seenCount = 0;
+uint32_t seenAt = 0;
+
+static const char* reasonStr(int r) {
+  switch (r) {
+    case 0: return "";
+    case WIFI_REASON_NO_AP_FOUND: return "ssid_not_found";
+    case WIFI_REASON_AUTH_FAIL:
+    case WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_HANDSHAKE_TIMEOUT:
+    case WIFI_REASON_802_1X_AUTH_FAILED: return "auth_failed";
+    default: return "connect_failed";
+  }
+}
+
+static void cacheScan(int n) {
+  seenCount = 0;
+  for (int k = 0; k < n; k++) {
+    String s = WiFi.SSID(k);
+    if (s.isEmpty()) continue;
+    int8_t r = WiFi.RSSI(k);
+    int f = -1;
+    for (uint8_t j = 0; j < seenCount; j++) if (seen[j].ssid == s) f = j;
+    if (f >= 0) { if (r > seen[f].rssi) seen[f].rssi = r; continue; }
+    if (seenCount < MAX_SEEN) seen[seenCount++] = {s, r, WiFi.encryptionType(k) != WIFI_AUTH_OPEN};
+  }
+  for (uint8_t i = 1; i < seenCount; i++)   // insertion sort, strongest first
+    for (uint8_t j = i; j > 0 && seen[j].rssi > seen[j - 1].rssi; j--) std::swap(seen[j], seen[j - 1]);
+  WiFi.scanDelete();
+  seenAt = millis();
+}
+
+static int seenRssi(const String& ssid) {
+  for (uint8_t j = 0; j < seenCount; j++) if (seen[j].ssid == ssid) return seen[j].rssi;
+  return -1000;
+}
+
+// Known networks in range strongest first, then the rest (hidden SSIDs never show up in a scan).
+static void buildCandidates() {
+  candCount = candIdx = 0;
+  for (uint8_t i = 0; i < netCount; i++) if (seenRssi(nets[i].ssid) > -1000) cand[candCount++] = i;
+  for (uint8_t i = 1; i < candCount; i++)
+    for (uint8_t j = i; j > 0 && seenRssi(nets[cand[j]].ssid) > seenRssi(nets[cand[j - 1]].ssid); j--) std::swap(cand[j], cand[j - 1]);
+  for (uint8_t i = 0; i < netCount; i++) if (seenRssi(nets[i].ssid) == -1000) cand[candCount++] = i;
+}
+
+String apSsid, apPass;
+static void startPortal(bool keepSta);
+
+static void tryNext() {
+  if (candIdx >= candCount) {
+    Serial.printf("# wifi: no saved network reachable, retry in %lus", (unsigned long)wifiBackoff / 1000);
+    if (millis() - offlineSince < PORTAL_AFTER_MS) Serial.printf(" (phone setup Wi-Fi '%s' opens after 60 s offline)", apSsid.c_str());
+    Serial.println();
+    ws = WS::Waiting;
+    wsDeadline = millis() + wifiBackoff;
+    wifiBackoff = std::min<uint32_t>(wifiBackoff * 2, 60000);
     return;
   }
-  if (wifiWasConnected) {
-    wifiWasConnected = false;
-    Serial.println("# wifi lost");
-  }
-  if (millis() < wifiNextAttempt) return;
-  Serial.printf("# wifi connecting to '%s' ...\n", cfg.wifiSsid.c_str());
+  const Net& n = nets[cand[candIdx++]];
+  trySsid = n.ssid;
+  Serial.printf("# wifi connecting to '%s' (%d dBm) ...\n", n.ssid.c_str(), seenRssi(n.ssid) > -1000 ? seenRssi(n.ssid) : 0);
+  discFlag = false;
+  WiFi.begin(n.ssid.c_str(), n.pass.c_str());
+  ws = WS::Trying;
+  wsDeadline = millis() + WIFI_TRY_MS;
+}
+
+static void wifiStartScan() {
   WiFi.disconnect();
-  WiFi.begin(cfg.wifiSsid.c_str(), cfg.wifiPass.c_str());
-  wifiNextAttempt = millis() + wifiBackoff + 8000;   // give each attempt ~8 s
-  wifiBackoff = std::min<uint32_t>(wifiBackoff * 2, 30000);
+  if (seenAt && millis() - seenAt < 5000) { buildCandidates(); tryNext(); return; }   // fresh enough
+  WiFi.scanDelete();
+  if (WiFi.scanNetworks(true) == WIFI_SCAN_FAILED) { buildCandidates(); tryNext(); return; }
+  ws = WS::Scanning;
+  wsDeadline = millis() + 15000;
+}
+
+static void enterUp() {
+  ws = WS::Up;
+  wifiBackoff = 5000;
+  if (netCount && WiFi.SSID() == nets[0].ssid) firstReason = 0;
+  Serial.printf("# wifi connected to '%s', ip=%s rssi=%d\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str(), WiFi.RSSI());
+  // NTP: needed for TLS certificate checks and for schedules (local time via cfg.tz)
+  configTzTime(cfg.tz.c_str(), "pool.ntp.org", "time.google.com");
+}
+
+static void portalTask();
+
+static void wifiTask() {
+  if (ws == WS::Portal) { portalTask(); return; }
+  bool up = WiFi.status() == WL_CONNECTED;
+  switch (ws) {
+    case WS::Idle:
+      offlineSince = millis();
+      if (netCount == 0) {
+        Serial.println("# no Wi-Fi saved yet: use the web app over USB, or phone setup");
+        startPortal(false);
+      } else {
+        wifiStartScan();
+      }
+      break;
+    case WS::Scanning: {
+      int n = WiFi.scanComplete();
+      if (n == WIFI_SCAN_RUNNING && millis() < wsDeadline) break;
+      if (n >= 0) cacheScan(n); else WiFi.scanDelete();
+      buildCandidates();
+      tryNext();
+      break;
+    }
+    case WS::Trying:
+      if (up) { enterUp(); break; }
+      if (discFlag || millis() > wsDeadline) {
+        int r = discFlag ? discReason : -1;
+        Serial.printf("# wifi '%s' failed: %s\n", trySsid.c_str(), r < 0 ? "timeout" : reasonStr(r));
+        if (netCount && trySsid == nets[0].ssid) firstReason = r;
+        WiFi.disconnect();
+        tryNext();
+      }
+      break;
+    case WS::Waiting:
+      if (millis() < wsDeadline) break;
+      if (netCount == 0 || millis() - offlineSince > PORTAL_AFTER_MS) startPortal(false);
+      else wifiStartScan();
+      break;
+    case WS::Up:
+      if (up) break;
+      Serial.println("# wifi lost");
+      offlineSince = millis();
+      wifiBackoff = 5000;
+      wifiStartScan();
+      break;
+    case WS::Portal:
+      break;
+  }
+}
+
+// ---------- Phone setup: own access point + captive portal ----------
+WebServer web(80);
+DNSServer dns;
+enum class TestSt : uint8_t { None, Testing, Ok, Failed };
+TestSt testSt = TestSt::None;
+String testSsid, testPass;
+int16_t testReason = 0;
+uint32_t testDeadline = 0, portalCloseAt = 0, portalActive = 0, portalScanAt = 0;
+bool portalScanning = false;
+const IPAddress PORTAL_IP(192, 168, 4, 1);
+
+static void loadApCredentials() {
+  apSsid = "PlugPilot-" + defaultDeviceId().substring(6);   // MAC based, stays the same if Device ID changes
+  prefs.begin("sys", false);                                  // not cleared by factory reset (matches a label on the box)
+  apPass = prefs.getString("ap_pass", "");
+  if (apPass.length() < 8) {
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%08lu", (unsigned long)(esp_random() % 100000000UL));
+    apPass = buf;
+    prefs.putString("ap_pass", apPass);
+  }
+  prefs.end();
+}
+
+static void portalStartScan() {
+  if (portalScanning || testSt == TestSt::Testing) return;
+  WiFi.scanDelete();
+  portalScanning = WiFi.scanNetworks(true) != WIFI_SCAN_FAILED;
+  portalScanAt = millis();
+}
+
+static void startPortal(bool keepSta) {
+  if (!keepSta) WiFi.disconnect();
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAPConfig(PORTAL_IP, PORTAL_IP, IPAddress(255, 255, 255, 0));
+  WiFi.softAP(apSsid.c_str(), apPass.c_str());
+  dns.setErrorReplyCode(DNSReplyCode::NoError);
+  dns.start(53, "*", PORTAL_IP);
+  web.begin();
+  ws = WS::Portal;
+  testSt = TestSt::None;
+  portalActive = portalScanAt = millis();
+  portalCloseAt = 0;
+  Serial.printf("# phone setup ON: join Wi-Fi '%s' password %s, then open http://192.168.4.1\n", apSsid.c_str(), apPass.c_str());
+}
+
+static void stopPortal() {
+  web.stop();
+  dns.stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  portalScanning = false;
+  testPass = "";
+  Serial.println("# phone setup OFF");
+  if (WiFi.status() == WL_CONNECTED) {
+    enterUp();
+  } else {
+    offlineSince = millis();     // another full minute of retries before the portal reopens
+    wifiBackoff = 5000;
+    ws = WS::Waiting;
+    wsDeadline = 0;
+  }
+}
+
+static void portalSendState() {
+  JsonDocument d;
+  d["id"] = cfg.deviceId;
+  d["fw"] = FW_VERSION;
+  d["scanning"] = portalScanning;
+  JsonArray sv = d["saved"].to<JsonArray>();
+  for (uint8_t i = 0; i < netCount; i++) sv.add(nets[i].ssid);
+  JsonArray ns = d["nets"].to<JsonArray>();
+  for (uint8_t j = 0; j < seenCount; j++) {
+    JsonObject o = ns.add<JsonObject>();
+    o["s"] = seen[j].ssid;
+    o["r"] = seen[j].rssi;
+    o["l"] = seen[j].lock;
+  }
+  JsonObject t = d["test"].to<JsonObject>();
+  static const char* const ST[] = {"", "testing", "ok", "failed"};
+  t["st"] = ST[(int)testSt];
+  t["ssid"] = testSsid;
+  t["reason"] = testSt == TestSt::Failed ? (testReason < 0 ? "connect_failed" : reasonStr(testReason)) : "";
+  String out;
+  serializeJson(d, out);
+  web.sendHeader("Cache-Control", "no-store");
+  web.send(200, "application/json", out);
+}
+
+static void portalRedirect() {
+  web.sendHeader("Location", "http://192.168.4.1/", true);
+  web.send(302, "text/plain", "");
+}
+
+static void setupPortalRoutes() {
+  web.on("/", HTTP_GET, [] {
+    // Phones probe e.g. connectivitycheck.gstatic.com/ : send them to our page so the sign-in sheet opens.
+    if (web.hostHeader() != "192.168.4.1") return portalRedirect();
+    web.sendHeader("Cache-Control", "no-store");
+    web.send_P(200, "text/html; charset=utf-8", PORTAL_HTML);
+  });
+  web.on("/api/state", HTTP_GET, portalSendState);
+  web.on("/api/scan", HTTP_POST, [] { portalStartScan(); portalSendState(); });
+  web.on("/api/connect", HTTP_POST, [] {
+    String s = web.arg("ssid"), p = web.arg("pass");
+    if (s.isEmpty() || s.length() > 32 || p.length() > 63 || (p.length() && p.length() < 8))
+      return web.send(400, "application/json", "{\"error\":\"bad_input\"}");
+    if (portalScanning || testSt == TestSt::Testing) return web.send(409, "application/json", "{\"error\":\"busy\"}");
+    Serial.printf("# phone setup: testing '%s' ...\n", s.c_str());
+    WiFi.disconnect();
+    testSsid = s;
+    testPass = p;
+    testSt = TestSt::Testing;
+    testDeadline = millis() + PORTAL_TEST_MS;
+    discFlag = false;
+    WiFi.begin(s.c_str(), p.c_str());
+    portalSendState();
+  });
+  web.on("/api/forget", HTTP_POST, [] { forgetNet(web.arg("ssid")); portalSendState(); });
+  web.onNotFound(portalRedirect);   // captive-portal probes (generate_204, hotspot-detect.html, ...)
+}
+
+static void portalTask() {
+  dns.processNextRequest();
+  web.handleClient();
+  bool phoneOn = WiFi.softAPgetStationNum() > 0;
+  if (phoneOn) portalActive = millis();
+
+  if (portalScanning) {
+    int n = WiFi.scanComplete();
+    if (n == WIFI_SCAN_RUNNING && millis() - portalScanAt < 15000) return;
+    portalScanning = false;
+    if (n >= 0) cacheScan(n); else WiFi.scanDelete();
+    // Nobody is setting the board up and a saved network is back (e.g. the router finished booting): leave.
+    if (!phoneOn && testSt != TestSt::Testing) {
+      for (uint8_t i = 0; i < netCount; i++)
+        if (seenRssi(nets[i].ssid) > -1000) { Serial.printf("# saved Wi-Fi '%s' is back\n", nets[i].ssid.c_str()); stopPortal(); return; }
+    }
+  }
+
+  switch (testSt) {
+    case TestSt::Testing:
+      if (WiFi.status() == WL_CONNECTED) {
+        Serial.printf("# phone setup: '%s' works, ip=%s\n", testSsid.c_str(), WiFi.localIP().toString().c_str());
+        rememberNet(testSsid, &testPass);
+        firstReason = 0;
+        testPass = "";
+        testSt = TestSt::Ok;
+        portalCloseAt = millis() + 15000;   // let the phone read the result first
+        configTzTime(cfg.tz.c_str(), "pool.ntp.org", "time.google.com");
+      } else if (discFlag || millis() > testDeadline) {
+        testReason = discFlag ? discReason : -1;
+        Serial.printf("# phone setup: '%s' failed: %s\n", testSsid.c_str(), testReason < 0 ? "timeout" : reasonStr(testReason));
+        WiFi.disconnect();
+        testPass = "";
+        testSt = TestSt::Failed;
+      }
+      return;
+    case TestSt::Ok:
+      if (millis() > portalCloseAt) stopPortal();
+      return;
+    default:
+      break;
+  }
+
+  if (netCount > 0 && millis() - portalActive > PORTAL_IDLE_MS) {
+    Serial.println("# phone setup: nobody connected for 3 min, retrying saved Wi-Fi");
+    stopPortal();
+  } else if (!phoneOn && netCount > 0 && WiFi.status() != WL_CONNECTED && millis() - portalScanAt > 30000) {
+    portalStartScan();   // background check for a saved network
+  }
 }
 
 // ---------- MQTT ----------
@@ -483,14 +851,19 @@ static void replyError(const char* type, const char* msg) {
   reply(d);
 }
 
+// "connected" | "portal" | "unconfigured" | "auth_failed" / "ssid_not_found" / "connect_failed"
+// (last failure of the newest saved network) | "connecting"
 static const char* wifiStateStr() {
-  if (cfg.wifiSsid.isEmpty()) return "unconfigured";
-  switch (WiFi.status()) {
-    case WL_CONNECTED: return "connected";
-    case WL_NO_SSID_AVAIL: return "ssid_not_found";
-    case WL_CONNECT_FAILED: return "auth_failed";
-    default: return "connecting";
-  }
+  if (WiFi.status() == WL_CONNECTED) return "connected";
+  if (ws == WS::Portal) return "portal";
+  if (netCount == 0) return "unconfigured";
+  if (firstReason) return firstReason < 0 ? "connect_failed" : reasonStr(firstReason);
+  return "connecting";
+}
+
+static void addNetworks(JsonDocument& d) {
+  JsonArray arr = d["networks"].to<JsonArray>();
+  for (uint8_t i = 0; i < netCount; i++) arr.add(nets[i].ssid);
 }
 
 static void handleCommand(const char* line) {
@@ -510,8 +883,15 @@ static void handleCommand(const char* line) {
     i["mac"] = WiFi.macAddress();
     i["device_id"] = cfg.deviceId;
     i["base"] = cfg.base;
-    i["wifi_ssid"] = cfg.wifiSsid;
-    i["has_wifi_pass"] = !cfg.wifiPass.isEmpty();
+    // wifi_ssid: the network in use, else the newest saved one
+    i["wifi_ssid"] = WiFi.status() == WL_CONNECTED ? WiFi.SSID() : (netCount ? nets[0].ssid : String());
+    i["has_wifi_pass"] = netCount && !nets[0].pass.isEmpty();
+    JsonArray wn = i["wifi_networks"].to<JsonArray>();
+    for (uint8_t k = 0; k < netCount; k++) wn.add(nets[k].ssid);
+    i["wifi_max"] = MAX_NETS;
+    i["ap_ssid"] = apSsid;
+    i["ap_pass"] = apPass;      // USB only (physical access); never published over MQTT
+    i["portal"] = ws == WS::Portal;
     i["mqtt_host"] = cfg.mqttHost;
     i["mqtt_port"] = cfg.mqttPort;
     i["mqtt_tls"] = cfg.mqttTls;
@@ -537,20 +917,54 @@ static void handleCommand(const char* line) {
 
   } else if (cmd == "scan") {
     Serial.println("# scanning wifi ...");
-    if (WiFi.status() != WL_CONNECTED) WiFi.disconnect();   // scan fails while a connect attempt is running
+    // wait for a background scan to finish (a second scan can't start while one runs)
+    for (uint32_t t0 = millis(); WiFi.scanComplete() == WIFI_SCAN_RUNNING && millis() - t0 < 10000;) { delay(50); esp_task_wdt_reset(); }
+    bool connecting = ws != WS::Up && ws != WS::Portal;
+    if (connecting) WiFi.disconnect();   // scan fails while a connect attempt is running
     int n = WiFi.scanNetworks(false, false);
+    if (n >= 0) cacheScan(n); else WiFi.scanDelete();
+    portalScanning = false;
     JsonDocument d;
     d["ok"] = n >= 0;
     d["type"] = "scan";
     JsonArray arr = d["networks"].to<JsonArray>();
-    for (int k = 0; k < n && k < 25; k++) {
+    for (uint8_t k = 0; k < seenCount; k++) {
       JsonObject o = arr.add<JsonObject>();
-      o["ssid"] = WiFi.SSID(k);
-      o["rssi"] = WiFi.RSSI(k);
-      o["secure"] = WiFi.encryptionType(k) != WIFI_AUTH_OPEN;
+      o["ssid"] = seen[k].ssid;
+      o["rssi"] = seen[k].rssi;
+      o["secure"] = seen[k].lock;
+      o["saved"] = findNet(seen[k].ssid) >= 0;
     }
-    WiFi.scanDelete();
-    wifiNextAttempt = 0;   // resume connecting right away
+    if (connecting) { ws = WS::Waiting; wsDeadline = 0; }   // resume connecting right away (uses this scan)
+    reply(d);
+
+  } else if (cmd == "wifi_add" || cmd == "wifi_forget") {
+    // Manage saved networks without rebooting (e.g. add the office Wi-Fi while at home).
+    String s = req["ssid"] | "";
+    JsonDocument d;
+    d["type"] = cmd;
+    if (cmd == "wifi_add") {
+      String p = req["pass"] | "";
+      if (s.isEmpty() || s.length() > 32 || p.length() > 63 || (p.length() && p.length() < 8)) {
+        replyError(cmd.c_str(), "ssid 1-32 chars, password empty or 8-63 chars"); return;
+      }
+      if (req["pass"].is<const char*>()) rememberNet(s, &p); else rememberNet(s, nullptr);
+      d["ok"] = true;
+    } else {
+      bool ok = forgetNet(s);
+      d["ok"] = ok;
+      if (!ok) d["error"] = "not saved";
+    }
+    addNetworks(d);
+    reply(d);
+
+  } else if (cmd == "portal") {
+    // Open phone setup now (same as a short press of BOOT).
+    if (ws != WS::Portal) startPortal(WiFi.status() == WL_CONNECTED);
+    JsonDocument d;
+    d["ok"] = true;
+    d["type"] = "portal";
+    d["ap_ssid"] = apSsid;
     reply(d);
 
   } else if (cmd == "set_config") {
@@ -563,13 +977,17 @@ static void handleCommand(const char* line) {
       if (newCount < 0) { replyError("set_config", err); return; }
     }
     if (req["tz"].is<const char*>() && strlen(req["tz"].as<const char*>()) > 40) { replyError("set_config", "tz too long"); return; }
+    String newSsid = req["wifi_ssid"] | "";
+    String newPass = req["wifi_pass"] | "";
+    if (newSsid.length() > 32 || newPass.length() > 63 || (newPass.length() && newPass.length() < 8)) {
+      replyError("set_config", "wifi: ssid 1-32 chars, password empty or 8-63 chars"); return;
+    }
 
     // Partial update: only keys present in the request are written.
     prefs.begin("cfg", false);
     auto putStr = [&](const char* key) {
       if (req[key].is<const char*>()) prefs.putString(key, req[key].as<const char*>());
     };
-    putStr("wifi_ssid"); putStr("wifi_pass");
     putStr("mqtt_host"); putStr("mqtt_user"); putStr("mqtt_pass");
     putStr("device_id"); putStr("base"); putStr("tz");
     if (req["mqtt_port"].is<int>()) prefs.putUShort("mqtt_port", req["mqtt_port"].as<uint16_t>());
@@ -585,6 +1003,8 @@ static void handleCommand(const char* line) {
       prefs.begin("relay", false); prefs.clear(); prefs.end();
       Serial.printf("# relay pins changed: %d channel(s), all relays start OFF\n", newCount);
     }
+    // Wi-Fi: added to the saved list (front = tried first on a tie); other saved networks are kept.
+    if (newSsid.length()) rememberNet(newSsid, req["wifi_pass"].is<const char*>() ? &newPass : nullptr);
     JsonDocument d;
     d["ok"] = true;
     d["type"] = "set_config";
@@ -647,13 +1067,18 @@ static void serialTask() {
   }
 }
 
-// ---------- BOOT button: hold 5 s => factory reset ----------
+// ---------- BOOT button: short press => phone setup, hold 5 s => factory reset ----------
 static void buttonTask() {
   static uint32_t pressedAt = 0;
   if (digitalRead(BOOT_BTN_PIN) == LOW) {
     if (pressedAt == 0) pressedAt = millis();
     else if (millis() - pressedAt > FACTORY_RESET_HOLD_MS) factoryReset();
   } else {
+    uint32_t held = pressedAt ? millis() - pressedAt : 0;
+    if (held >= 50 && held < 2000 && ws != WS::Portal) {
+      Serial.println("# BOOT pressed: opening phone setup");
+      startPortal(WiFi.status() == WL_CONNECTED);
+    }
     pressedAt = 0;
   }
 }
@@ -667,8 +1092,17 @@ void setup() {
   WiFi.setHostname(cfg.deviceId.c_str());   // core 2.x: must precede WiFi.mode()
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(false); // we manage reconnects ourselves
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    uint8_t r = info.wifi_sta_disconnected.reason;
+    if (r == WIFI_REASON_ASSOC_LEAVE) return;   // our own WiFi.disconnect()
+    discReason = r;
+    discFlag = true;
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   initRelays();                 // before networking, so loads don't glitch
   loadRules();
+  loadNets();
+  loadApCredentials();          // after WiFi.mode(): esp_random() is a true RNG once the radio is on
+  setupPortalRoutes();
   pinMode(BOOT_BTN_PIN, INPUT_PULLUP);
 
   if (cfg.mqttTls) {
@@ -691,8 +1125,9 @@ void setup() {
   for (uint8_t i = 0; i < cfg.relayCount; i++)
     Serial.printf("# pinmap CH%u -> GPIO%u (%s)\n", i + 1, relayPins[i], relayOn(i) ? "ON" : "OFF");
   Serial.printf("# schedule: %u rule(s), tz=%s\n", ruleCount, cfg.tz.c_str());
-  if (cfg.wifiSsid.isEmpty())
-    Serial.println("# not provisioned: open the web app > Provision tab and connect over USB");
+  for (uint8_t i = 0; i < netCount; i++) Serial.printf("# wifi saved %u: '%s'\n", i + 1, nets[i].ssid.c_str());
+  Serial.printf("# phone setup: Wi-Fi '%s' password %s (opens when no saved Wi-Fi is reachable for 60 s, or press BOOT briefly)\n",
+                apSsid.c_str(), apPass.c_str());
 }
 
 void loop() {
