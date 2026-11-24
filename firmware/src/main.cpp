@@ -8,6 +8,8 @@
  *  - Up to 5 saved Wi-Fi networks; joins the strongest known one
  *  - Phone setup (captive portal): own Wi-Fi "PlugPilot-xxxxxx" opens when no saved network is
  *    reachable for 60 s, when nothing is saved yet, or on a short press of BOOT
+ *  - Optional SHT3x (SHT30/31/35) temperature & humidity sensor on I2C: SDA GPIO21, SCL GPIO22,
+ *    auto-detected at 0x44/0x45, published every 15 s on <base>/<id>/sensor (retained)
  *  - Hold BOOT (GPIO0) for 5 s => factory reset
  *  - Task watchdog 15 s
  *  - MQTT over TLS (port 8883) for cloud brokers, CA roots in ca_bundle.h
@@ -23,6 +25,7 @@
 #include <time.h>
 #include <WebServer.h>
 #include <DNSServer.h>
+#include <Wire.h>
 #include "ca_bundle.h"
 #include "portal_html.h"
 
@@ -46,6 +49,9 @@ static const uint32_t PORTAL_AFTER_MS = 60000;        // offline this long => op
 static const uint32_t PORTAL_IDLE_MS = 180000;        // close phone setup after 3 min with no phone on it
 static const uint32_t WIFI_TRY_MS = 12000;            // per network attempt
 static const uint32_t PORTAL_TEST_MS = 20000;         // phone setup: test a new network this long
+static const uint8_t SENSOR_SDA = 21, SENSOR_SCL = 22; // ESP32 default I2C pins
+static const uint32_t SENSOR_INTERVAL_MS = 15000;
+static const uint32_t SENSOR_PROBE_MS = 30000;         // look for a (re)connected sensor this often
 
 // ---------- Config (NVS namespace "cfg") ----------
 struct Config {
@@ -728,6 +734,118 @@ static void portalTask() {
   }
 }
 
+// ---------- SHT3x temperature / humidity sensor (I2C) ----------
+// No library: single-shot measurement, high repeatability, no clock stretching (0x2400), CRC-8 checked.
+struct {
+  bool enabled = false;     // false when GPIO21/22 are used as relay pins
+  bool present = false;     // answered at 0x44/0x45
+  bool ok = false;          // last reading valid
+  uint8_t addr = 0, fails = 0;
+  float t = NAN, h = NAN;
+  const char* err = "";
+  uint32_t lastRead = 0, lastProbe = 0, lastLog = 0;
+  bool probed = false, readOnce = false;
+} sht;
+
+static uint8_t shtCrc(const uint8_t* d) {
+  uint8_t c = 0xFF;
+  for (int i = 0; i < 2; i++) {
+    c ^= d[i];
+    for (int b = 0; b < 8; b++) c = (c & 0x80) ? (uint8_t)((c << 1) ^ 0x31) : (uint8_t)(c << 1);
+  }
+  return c;
+}
+
+static bool shtProbe() {
+  for (uint8_t a : {0x44, 0x45}) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) { sht.addr = a; return true; }
+  }
+  return false;
+}
+
+static bool shtRead(float& t, float& h, const char** err) {
+  Wire.beginTransmission(sht.addr);
+  Wire.write(0x24);
+  Wire.write(0x00);
+  if (Wire.endTransmission() != 0) { *err = "no_ack"; return false; }
+  delay(16);   // max measurement time 15.5 ms
+  if (Wire.requestFrom((int)sht.addr, 6) != 6) { *err = "short_read"; return false; }
+  uint8_t b[6];
+  for (uint8_t& x : b) x = Wire.read();
+  if (shtCrc(b) != b[2] || shtCrc(b + 3) != b[5]) { *err = "crc"; return false; }
+  t = -45.0f + 175.0f * (float)((b[0] << 8) | b[1]) / 65535.0f;
+  h = 100.0f * (float)((b[3] << 8) | b[4]) / 65535.0f;
+  return true;
+}
+
+// Retained "<prefix>sensor": {"type":"SHT3x","ok":true,"t":28.4,"h":61.2} or {"ok":false,"error":...}
+static void publishSensor() {
+  if (!mqtt.connected() || !sht.enabled || (!sht.present && !sht.readOnce)) return;
+  JsonDocument doc;
+  doc["type"] = "SHT3x";
+  doc["ok"] = sht.ok;
+  if (sht.ok) {
+    doc["t"] = serialized(String(sht.t, 1));
+    doc["h"] = serialized(String(sht.h, 1));
+  } else {
+    doc["error"] = *sht.err ? sht.err : "not_found";
+  }
+  String out;
+  serializeJson(doc, out);
+  mqtt.publish((topicPrefix + "sensor").c_str(), out.c_str(), true);
+}
+
+static void initSensor() {
+  for (uint8_t i = 0; i < cfg.relayCount; i++)
+    if (relayPins[i] == SENSOR_SDA || relayPins[i] == SENSOR_SCL) {
+      Serial.println("# sensor: GPIO21/22 are relay pins, SHT3x disabled");
+      return;
+    }
+  sht.enabled = Wire.begin(SENSOR_SDA, SENSOR_SCL, 100000);
+  Wire.setTimeOut(50);
+}
+
+static void sensorTask() {
+  if (!sht.enabled) return;
+  uint32_t now = millis();
+  if (!sht.present) {
+    if (sht.probed && now - sht.lastProbe < SENSOR_PROBE_MS) return;
+    bool first = !sht.probed;
+    sht.probed = true;
+    sht.lastProbe = now;
+    if (!shtProbe()) {
+      if (first) Serial.println("# sensor: no SHT3x on SDA GPIO21 / SCL GPIO22 (optional)");
+      return;
+    }
+    sht.present = true;
+    sht.fails = 0;
+    sht.lastRead = 0;
+    Serial.printf("# sensor: SHT3x found at 0x%02X (SDA GPIO21, SCL GPIO22)\n", sht.addr);
+  }
+  if (sht.lastRead && now - sht.lastRead < SENSOR_INTERVAL_MS) return;
+  sht.lastRead = now ? now : 1;
+  float t, h;
+  const char* err = "";
+  if (shtRead(t, h, &err)) {
+    bool changed = !sht.ok;
+    sht.t = t; sht.h = h; sht.ok = true; sht.fails = 0; sht.readOnce = true;
+    if (changed || now - sht.lastLog > 300000) {
+      sht.lastLog = now;
+      Serial.printf("# sensor %.1f C  %.1f %%RH\n", t, h);
+    }
+    publishSensor();
+  } else if (++sht.fails >= 3) {
+    // three bad readings in a row: report it, then look for the sensor again
+    Serial.printf("# sensor: SHT3x read failed (%s), check wiring\n", err);
+    sht.err = err;
+    sht.ok = false;
+    sht.present = false;
+    publishSensor();
+    sht.lastProbe = now;
+  }
+}
+
 // ---------- MQTT ----------
 uint32_t mqttNextAttempt = 0, mqttBackoff = 1000, lastTelemetry = 0;
 
@@ -739,6 +857,13 @@ static void publishInfo() {
   doc["mac"] = WiFi.macAddress();
   doc["ip"] = WiFi.localIP().toString();
   doc["tz"] = cfg.tz;
+  if (sht.enabled) {   // where a sensor goes (present or not), for the web wiring hints
+    JsonObject s = doc["sensor"].to<JsonObject>();
+    s["type"] = "SHT3x";
+    s["sda"] = SENSOR_SDA;
+    s["scl"] = SENSOR_SCL;
+    s["present"] = sht.present;
+  }
   JsonArray arr = doc["relays"].to<JsonArray>();
   for (uint8_t i = 0; i < cfg.relayCount; i++) {
     JsonObject r = arr.add<JsonObject>();
@@ -786,7 +911,7 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
     }
   } else if (sub == "cmd") {
     if (p == "reboot") { mqtt.publish((topicPrefix + "status").c_str(), "offline", true); delay(100); ESP.restart(); }
-    else if (p == "ping") { publishInfo(); publishTelemetry(); publishSchedule(); }
+    else if (p == "ping") { publishInfo(); publishTelemetry(); publishSchedule(); publishSensor(); }
     else if (p == "all_off") { for (uint8_t i = 0; i < cfg.relayCount; i++) setRelay(i, "OFF", "cmd"); }
   }
 }
@@ -828,6 +953,7 @@ static void mqttTask() {
   for (uint8_t i = 0; i < cfg.relayCount; i++) publishRelayState(i);
   publishTelemetry();
   publishSchedule();
+  publishSensor();
   lastTelemetry = millis();
   // Log exactly what we listen to, so a mismatching external topic is easy to spot.
   // (Topics are case-sensitive: "ROCKETMAN/..." != "rocketman/...")
@@ -913,6 +1039,14 @@ static void handleCommand(const char* line) {
     JsonArray safe = i["safe_pins"].to<JsonArray>();
     for (uint8_t s : SAFE_PINS) safe.add(s);
     rulesToJson(i["schedule"].to<JsonArray>());
+    JsonObject sn = i["sensor"].to<JsonObject>();
+    sn["type"] = "SHT3x";
+    sn["enabled"] = sht.enabled;          // false = GPIO21/22 used by relays
+    sn["present"] = sht.present;
+    sn["ok"] = sht.ok;
+    if (sht.present) sn["addr"] = sht.addr;
+    if (sht.ok) { sn["t"] = serialized(String(sht.t, 1)); sn["h"] = serialized(String(sht.h, 1)); }
+    if (*sht.err) sn["error"] = sht.err;
     reply(d);
 
   } else if (cmd == "scan") {
@@ -1099,6 +1233,7 @@ void setup() {
     discFlag = true;
   }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   initRelays();                 // before networking, so loads don't glitch
+  initSensor();
   loadRules();
   loadNets();
   loadApCredentials();          // after WiFi.mode(): esp_random() is a true RNG once the radio is on
@@ -1135,6 +1270,7 @@ void loop() {
   wifiTask();
   mqttTask();
   scheduleTask();
+  sensorTask();
   buttonTask();
   esp_task_wdt_reset();
   delay(5);
