@@ -231,7 +231,8 @@ function onMessage(topic, payload, packet) {
   const rest = topic.slice(base.length + 1).split('/');   // [id, kind, ...]
   const [id, kind] = rest;
   if (!['info', 'status', 'telemetry', 'relay', 'schedule', 'sensor', 'auto'].includes(kind)) return;
-  if ((kind === 'relay' && rest[3] !== 'state') || ((kind === 'schedule' || kind === 'auto') && rest.length !== 2)) return;   // commands, not state
+  // commands (…/set) and the plain sensor/temperature|humidity copies are not device state here
+  if ((kind === 'relay' && rest[3] !== 'state') || (['schedule', 'auto', 'sensor'].includes(kind) && rest.length !== 2)) return;
 
   // empty retained payload = device was "forgotten"
   if (text === '' && (kind === 'info' || kind === 'status')) {
@@ -563,6 +564,12 @@ function sensorBlock(id, d) {
       el('div', { class: 'sensor-lbl' }, '💧 ความชื้น'),
       el('div', { class: 'sensor-val' }, el('b', {}, s.h.toFixed(1)), ' %RH'),
       sparkline(hist, 2, '%', 'hum')),
+    el('div', { class: 'sensor-topics muted' }, 'MQTT (ใช้กับแอปอื่นได้): ',
+      ...[['sensor/temperature', '°C'], ['sensor/humidity', '%RH'], ['sensor', 'JSON']].map(([t, what]) => {
+        const topic = `${base}/${id}/${t}`;
+        return el('button', { type: 'button', class: 'copy mono', title: `คัดลอก ${topic} (${what})`,
+          onclick: () => navigator.clipboard?.writeText(topic).then(() => toast(`คัดลอก ${topic}`)) }, `…/${t}`);
+      })),
   );
 }
 

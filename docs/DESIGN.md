@@ -111,6 +111,7 @@ Web ─ requestPort() ─► esptool-js: DTR/RTS reset เข้า ROM bootload
 | `<base>/<id>/relay/<n>/set` | →ESP | `ON` / `OFF` / `TOGGLE` | 1 | ✘ | **ห้าม retain** (กันสั่งซ้ำตอน reconnect) |
 | `<base>/<id>/telemetry` | ESP→ | JSON: `{rssi, uptime, heap, ip}` | 0 | ✘ | ทุก 30 วินาที |
 | `<base>/<id>/sensor` | ESP→ | `{"type":"SHT3x","ok":true,"t":28.4,"h":61.2}` / `{"ok":false,"error":"no_ack"}` | 0 | ✔ | SHT31 ทุก 15 s (I²C SDA 21 / SCL 22, single-shot 0x2400 + CRC-8) |
+| `<base>/<id>/sensor/temperature` · `/sensor/humidity` | ESP→ | `28.4` · `61.2` (ว่างเมื่อเซ็นเซอร์เสีย) | 0 | ✔ | ค่าเดียวต่อ topic สำหรับแอปภายนอก ส่งพร้อม `sensor` |
 | `<base>/<id>/auto/set` | →ESP | `[{"ch":1,"s":"t"\|"h","op":">"\|"<","v":30,"hy":1,"en":true}]` (≤ 8) | 1 | ✘ | เงื่อนไขตามเซ็นเซอร์: `>` ON เมื่อ > v, OFF เมื่อ ≤ v−hy · `<` ON เมื่อ < v, OFF เมื่อ ≥ v+hy · สั่งเฉพาะตอนสถานะของเงื่อนไขเปลี่ยน (edge-triggered) |
 | `<base>/<id>/auto` | ESP→ | `{"rules":[…],"state":[1,0,null]}` (error = non-retained) | 1 | ✔ | เงื่อนไขที่ใช้อยู่ + สถานะแต่ละข้อ |
 | `<base>/<id>/cmd` | →ESP | `reboot` / `ping` / `all_off` | 1 | ✘ | คำสั่งระดับอุปกรณ์ |

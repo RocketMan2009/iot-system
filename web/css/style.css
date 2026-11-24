@@ -410,6 +410,8 @@ a.btn { text-decoration: none; display: inline-block; }
 .spark.hum polyline { stroke: var(--accent); }
 .spark-axis { display: flex; justify-content: space-between; gap: 4px; font-size: .68rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .spark-empty { font-size: .72rem; margin-top: 6px; }
+.sensor-topics { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: .72rem; }
+.sensor-topics .copy { font-size: .72rem; }
 .sensor-bad { display: block; background: var(--warn-bg); color: var(--warn-ink); border-radius: 10px; padding: 8px 10px; font-size: .85rem; }
 @media (max-width: 380px) { .sensor { grid-template-columns: 1fr; } }
 

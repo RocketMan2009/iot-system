@@ -906,7 +906,15 @@ static void publishSensor() {
   }
   String out;
   serializeJson(doc, out);
-  mqtt.publish((topicPrefix + "sensor").c_str(), out.c_str(), true);
+  String t = topicPrefix + "sensor";
+  bool ok = mqtt.publish(t.c_str(), out.c_str(), true);
+  // Plain numbers for apps that want one value per topic (IoT MQTT Panel, Node-RED, Home Assistant, ...).
+  // On a sensor fault they are cleared to "" so nobody keeps using a stale value.
+  String tv = sht.ok ? String(sht.t, 1) : String(), hv = sht.ok ? String(sht.h, 1) : String();
+  ok &= mqtt.publish((t + "/temperature").c_str(), tv.c_str(), true);
+  ok &= mqtt.publish((t + "/humidity").c_str(), hv.c_str(), true);
+  Serial.printf("# mqtt tx %s = %s  (+ /temperature = %s, /humidity = %s)%s\n", t.c_str(), out.c_str(),
+                sht.ok ? tv.c_str() : "\"\"", sht.ok ? hv.c_str() : "\"\"", ok ? "" : "  FAILED");
 }
 
 static void initSensor() {

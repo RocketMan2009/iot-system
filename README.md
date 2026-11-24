@@ -94,6 +94,8 @@ python -m http.server 8080 --directory web
 | `home/<id>/schedule/set` | JSON ตารางเวลา เช่น `[{"ch":1,"t":"18:30","a":"ON","d":127,"en":true}]` |
 | `home/<id>/schedule` | ตารางเวลาที่ใช้งานอยู่ + เวลาบนบอร์ด (retained) |
 | `home/<id>/sensor` | `{"type":"SHT3x","ok":true,"t":28.4,"h":61.2}` ทุก 15 วินาที (retained) — มีเมื่อต่อ SHT31 |
+| `home/<id>/sensor/temperature` | `28.4` (°C, ตัวเลขล้วน, retained) — ว่าง `""` เมื่อเซ็นเซอร์เสีย |
+| `home/<id>/sensor/humidity` | `61.2` (%RH, ตัวเลขล้วน, retained) — สำหรับแอปอย่าง IoT MQTT Panel / Node-RED / Home Assistant |
 
 **เซ็นเซอร์อุณหภูมิ/ความชื้น SHT31 (ไม่บังคับ):** VIN→3V3 (ห้าม 5V), GND→GND, SCL→GPIO22, SDA→GPIO21 — บอร์ดหาเจอเองที่ I²C 0x44/0x45
 ค่าแสดงในการ์ดบอร์ดบนแดชบอร์ดพร้อมกราฟ 24 ชม. (เก็บในเบราว์เซอร์) · ถ้าเลือก GPIO21/22 เป็นขารีเลย์ บอร์ดจะปิดการอ่านเซ็นเซอร์
