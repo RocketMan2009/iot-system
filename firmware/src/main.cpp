@@ -756,6 +756,119 @@ static uint8_t shtCrc(const uint8_t* d) {
   return c;
 }
 
+// ---------- Sensor rules: switch a relay on a temperature / humidity threshold ----------
+// {"ch":1,"s":"t"|"h","op":">"|"<","v":30,"hy":0.5,"en":true}
+//   ">" : ON when value > v, OFF when value <= v - hy   (fan, cooler, dehumidifier)
+//   "<" : ON when value < v, OFF when value >= v + hy   (heater, humidifier)
+// Edge-triggered: the relay is only switched when the rule's own state changes, so a manual
+// switch or a schedule stays in effect until the next threshold crossing.
+struct AutoRule { uint8_t ch; bool hum; bool above; float v, hy; bool en; int8_t state; };  // state -1 = not decided yet
+static const uint8_t MAX_AUTO = 8;
+AutoRule autoRules[MAX_AUTO];
+uint8_t autoCount = 0;
+
+static void autoToJson(JsonArray arr) {
+  for (uint8_t i = 0; i < autoCount; i++) {
+    const AutoRule& r = autoRules[i];
+    JsonObject o = arr.add<JsonObject>();
+    o["ch"] = r.ch;
+    o["s"] = r.hum ? "h" : "t";
+    o["op"] = r.above ? ">" : "<";
+    o["v"] = serialized(String(r.v, 1));
+    o["hy"] = serialized(String(r.hy, 1));
+    o["en"] = r.en;
+  }
+}
+
+static bool parseAuto(JsonArrayConst arr, AutoRule* out, uint8_t& n, bool strict, const char** err) {
+  n = 0;
+  if (arr.size() > MAX_AUTO) { *err = "max 8 sensor rules"; if (strict) return false; }
+  for (JsonObjectConst r : arr) {
+    if (n >= MAX_AUTO) break;
+    int ch = r["ch"] | 0;
+    String s = r["s"] | "";
+    String op = r["op"] | "";
+    float v = r["v"] | NAN;
+    float hy = r["hy"] | (s == "h" ? 2.0f : 0.5f);
+    const char* e = nullptr;
+    if (ch < 1 || ch > cfg.relayCount) e = "rule: ch out of range";
+    else if (s != "t" && s != "h") e = "rule: s must be t or h";
+    else if (op != ">" && op != "<") e = "rule: op must be > or <";
+    else if (isnan(v) || (s == "t" ? (v < -40 || v > 125) : (v < 0 || v > 100))) e = "rule: v out of range";
+    else if (isnan(hy) || hy < 0 || hy > 20) e = "rule: hy must be 0-20";
+    if (e) {
+      if (strict) { *err = e; return false; }
+      continue;
+    }
+    out[n++] = {(uint8_t)ch, s == "h", op == ">", v, hy, r["en"] | true, -1};
+  }
+  return true;
+}
+
+// Retained "<prefix>auto": {"rules":[...],"state":[1,0,null]} (state per rule: 1 = ON, 0 = OFF, null = waiting)
+static void publishAuto(const char* error = nullptr) {
+  if (!mqtt.connected()) return;
+  JsonDocument doc;
+  autoToJson(doc["rules"].to<JsonArray>());
+  JsonArray st = doc["state"].to<JsonArray>();
+  for (uint8_t i = 0; i < autoCount; i++) {
+    if (autoRules[i].state < 0) st.add(nullptr); else st.add(autoRules[i].state);
+  }
+  if (error) doc["error"] = error;
+  String out;
+  serializeJson(doc, out);
+  mqtt.publish((topicPrefix + "auto").c_str(), out.c_str(), error == nullptr);
+}
+
+static void loadAuto() {
+  prefs.begin("sched", true);
+  String s = prefs.isKey("auto") ? prefs.getString("auto", "[]") : String("[]");
+  prefs.end();
+  JsonDocument doc;
+  const char* err = nullptr;
+  if (deserializeJson(doc, s) || !parseAuto(doc.as<JsonArrayConst>(), autoRules, autoCount, false, &err)) autoCount = 0;
+}
+
+static bool applyAuto(JsonVariantConst v, const char** err) {
+  JsonArrayConst arr = v.is<JsonArrayConst>() ? v.as<JsonArrayConst>() : v["rules"].as<JsonArrayConst>();
+  if (arr.isNull()) { *err = "expected a JSON array of rules"; return false; }
+  AutoRule tmp[MAX_AUTO];
+  uint8_t n = 0;
+  if (!parseAuto(arr, tmp, n, true, err)) return false;
+  memcpy(autoRules, tmp, sizeof(AutoRule) * n);
+  autoCount = n;
+  JsonDocument doc;
+  autoToJson(doc.to<JsonArray>());
+  String s;
+  serializeJson(doc, s);
+  prefs.begin("sched", false);
+  prefs.putString("auto", s);
+  prefs.end();
+  Serial.printf("# sensor rules saved: %u rule(s)\n", autoCount);
+  publishAuto();
+  return true;
+}
+
+// Called after every good sensor reading.
+static void autoEvaluate(float t, float h) {
+  bool changed = false;
+  for (uint8_t i = 0; i < autoCount; i++) {
+    AutoRule& r = autoRules[i];
+    if (!r.en) continue;
+    float x = r.hum ? h : t;
+    int8_t want = r.state;
+    if (r.above) { if (x > r.v) want = 1; else if (x <= r.v - r.hy) want = 0; }
+    else         { if (x < r.v) want = 1; else if (x >= r.v + r.hy) want = 0; }
+    if (want < 0 || want == r.state) continue;   // inside the hysteresis band at start: wait
+    r.state = want;
+    changed = true;
+    Serial.printf("# sensor rule %u: %s %.1f %s %.1f -> CH%u %s\n", i + 1, r.hum ? "RH" : "T", x,
+                  r.above ? ">" : "<", r.v, r.ch, want ? "ON" : "OFF");
+    setRelay(r.ch - 1, want ? "ON" : "OFF", "sensor");
+  }
+  if (changed) publishAuto();
+}
+
 static bool shtProbe() {
   for (uint8_t a : {0x44, 0x45}) {
     Wire.beginTransmission(a);
@@ -835,6 +948,7 @@ static void sensorTask() {
       Serial.printf("# sensor %.1f C  %.1f %%RH\n", t, h);
     }
     publishSensor();
+    autoEvaluate(t, h);
   } else if (++sht.fails >= 3) {
     // three bad readings in a row: report it, then look for the sensor again
     Serial.printf("# sensor: SHT3x read failed (%s), check wiring\n", err);
@@ -857,6 +971,7 @@ static void publishInfo() {
   doc["mac"] = WiFi.macAddress();
   doc["ip"] = WiFi.localIP().toString();
   doc["tz"] = cfg.tz;
+  doc["auto_max"] = MAX_AUTO;   // supports sensor rules (auto/set)
   if (sht.enabled) {   // where a sensor goes (present or not), for the web wiring hints
     JsonObject s = doc["sensor"].to<JsonObject>();
     s["type"] = "SHT3x";
@@ -909,9 +1024,16 @@ static void onMqttMessage(char* topic, byte* payload, unsigned int len) {
       Serial.printf("# schedule rejected: %s\n", err);
       publishSchedule(err);
     }
+  } else if (sub == "auto/set") {
+    JsonDocument doc;
+    const char* err = "invalid JSON";
+    if (deserializeJson(doc, p) || !applyAuto(doc.as<JsonVariantConst>(), &err)) {
+      Serial.printf("# sensor rules rejected: %s\n", err);
+      publishAuto(err);
+    }
   } else if (sub == "cmd") {
     if (p == "reboot") { mqtt.publish((topicPrefix + "status").c_str(), "offline", true); delay(100); ESP.restart(); }
-    else if (p == "ping") { publishInfo(); publishTelemetry(); publishSchedule(); publishSensor(); }
+    else if (p == "ping") { publishInfo(); publishTelemetry(); publishSchedule(); publishSensor(); publishAuto(); }
     else if (p == "all_off") { for (uint8_t i = 0; i < cfg.relayCount; i++) setRelay(i, "OFF", "cmd"); }
   }
 }
@@ -954,10 +1076,11 @@ static void mqttTask() {
   publishTelemetry();
   publishSchedule();
   publishSensor();
+  publishAuto();
   lastTelemetry = millis();
   // Log exactly what we listen to, so a mismatching external topic is easy to spot.
   // (Topics are case-sensitive: "ROCKETMAN/..." != "rocketman/...")
-  for (const String& sub : {topicPrefix + "relay/+/set", topicPrefix + "schedule/set", topicPrefix + "cmd"}) {
+  for (const String& sub : {topicPrefix + "relay/+/set", topicPrefix + "schedule/set", topicPrefix + "auto/set", topicPrefix + "cmd"}) {
     bool subOk = mqtt.subscribe(sub.c_str(), 1);
     Serial.printf("# mqtt sub %s %s\n", sub.c_str(), subOk ? "ok" : "FAILED");
   }
@@ -1047,6 +1170,7 @@ static void handleCommand(const char* line) {
     if (sht.present) sn["addr"] = sht.addr;
     if (sht.ok) { sn["t"] = serialized(String(sht.t, 1)); sn["h"] = serialized(String(sht.h, 1)); }
     if (*sht.err) sn["error"] = sht.err;
+    autoToJson(i["auto"].to<JsonArray>());
     reply(d);
 
   } else if (cmd == "scan") {
@@ -1157,6 +1281,15 @@ static void handleCommand(const char* line) {
     d["count"] = ruleCount;
     reply(d);
 
+  } else if (cmd == "set_auto") {
+    const char* err = nullptr;
+    if (!applyAuto(req.as<JsonVariantConst>(), &err)) { replyError("set_auto", err); return; }
+    JsonDocument d;
+    d["ok"] = true;
+    d["type"] = "set_auto";
+    d["count"] = autoCount;
+    reply(d);
+
   } else if (cmd == "relay") {
     int ch = req["ch"] | 0;
     String st = req["state"] | "TOGGLE";
@@ -1235,6 +1368,7 @@ void setup() {
   initRelays();                 // before networking, so loads don't glitch
   initSensor();
   loadRules();
+  loadAuto();
   loadNets();
   loadApCredentials();          // after WiFi.mode(): esp_random() is a true RNG once the radio is on
   setupPortalRoutes();
@@ -1260,6 +1394,7 @@ void setup() {
   for (uint8_t i = 0; i < cfg.relayCount; i++)
     Serial.printf("# pinmap CH%u -> GPIO%u (%s)\n", i + 1, relayPins[i], relayOn(i) ? "ON" : "OFF");
   Serial.printf("# schedule: %u rule(s), tz=%s\n", ruleCount, cfg.tz.c_str());
+  Serial.printf("# sensor rules: %u\n", autoCount);
   for (uint8_t i = 0; i < netCount; i++) Serial.printf("# wifi saved %u: '%s'\n", i + 1, nets[i].ssid.c_str());
   Serial.printf("# phone setup: Wi-Fi '%s' password %s (opens when no saved Wi-Fi is reachable for 60 s, or press BOOT briefly)\n",
                 apSsid.c_str(), apPass.c_str());
