@@ -323,6 +323,7 @@
           <h2>วงจรการต่ออุปกรณ์</h2>
           <div class="row">
             <span id="ov-wiring-count" class="pill on"></span>
+            <label class="check"><input type="checkbox" id="ov-sensor" /> เซ็นเซอร์ SHT31</label>
             <button id="ov-edit-pins" class="btn small" type="button">เปลี่ยนขารีเลย์</button>
           </div>
         </div>
@@ -330,6 +331,7 @@
           ผังนี้วาดตามขารีเลย์ที่เลือกในแท็บ “ตั้งค่าบอร์ด (USB)” — เปลี่ยนขาที่นั่นแล้วรูปนี้เปลี่ยนตามทันที ·
           ชี้เมาส์ที่สายเพื่อดูว่าต่อจากขาไหนไปขาไหน
         </p>
+        <p id="ov-sensor-note" class="field-note warn" hidden>⚠ ไม่ได้วาด SHT31 เพราะ GPIO21 หรือ GPIO22 ถูกเลือกเป็นขารีเลย์ — เซ็นเซอร์ใช้ 2 ขานี้ (SDA/SCL) เอาออกจากรีเลย์ก่อน</p>
         <div id="ov-wiring" class="wiring-wrap"></div>
         <div class="two-col wiring-info">
           <div class="table-wrap" id="ov-wiring-table"></div>

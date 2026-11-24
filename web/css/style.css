@@ -267,6 +267,11 @@ label.check.small { font-size: .82rem; }
 .wiring .tag-text { font: 600 10px "IBM Plex Mono", monospace; fill: #fff; }
 .wiring .tag-text.dark { fill: #1f2328; }
 .wiring .rpcb { fill: #0f172a; stroke: #334155; }
+.wiring .spcb { fill: #5b2a86; stroke: #3b1a5a; }
+.wiring .shole { fill: #e5e7eb; stroke: #c9a227; stroke-width: 3; }
+.wiring .schip { fill: #111827; stroke: #9ca3af; }
+.wiring .stitle { font: 700 13px "IBM Plex Mono", monospace; fill: #f3e8ff; }
+.wiring .ssub { font-size: 10px; fill: #e9d5ff; }
 .wiring .rtitle { font-size: 13px; font-weight: 600; fill: var(--text); }
 .wiring .rpin { fill: #e5e7eb; stroke: #94a3b8; }
 .wiring .rpin-label { font: 600 11px "IBM Plex Mono", monospace; fill: #e2e8f0; }
@@ -389,6 +394,24 @@ a.btn { text-decoration: none; display: inline-block; }
 .field-note { font-size: .78rem; color: var(--muted); min-height: 1em; }
 .field-note.warn { color: var(--danger); }
 @media (max-width: 560px) { .host-row { flex-wrap: wrap; } .host-row select { flex-basis: 100%; } }
+
+/* SHT31 temperature / humidity (dashboard device card) */
+.sensor { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.sensor.stale { opacity: .6; }
+.sensor-item { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.sensor-lbl { font-size: .78rem; color: var(--muted); }
+.sensor-val { font-size: .9rem; color: var(--muted); }
+.sensor-val b { font-size: 1.6rem; color: var(--text); font-variant-numeric: tabular-nums; }
+.sensor-item.temp .sensor-val b { color: var(--danger); }
+.sensor-item.hum .sensor-val b { color: var(--accent); }
+.spark { display: block; width: 100%; height: 40px; margin-top: 4px; overflow: visible; }
+.spark polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.spark.temp polyline { stroke: var(--danger); }
+.spark.hum polyline { stroke: var(--accent); }
+.spark-axis { display: flex; justify-content: space-between; gap: 4px; font-size: .68rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.spark-empty { font-size: .72rem; margin-top: 6px; }
+.sensor-bad { display: block; background: var(--warn-bg); color: var(--warn-ink); border-radius: 10px; padding: 8px 10px; font-size: .85rem; }
+@media (max-width: 380px) { .sensor { grid-template-columns: 1fr; } }
 
 /* saved Wi-Fi networks (USB tab) */
 .saved-nets { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }

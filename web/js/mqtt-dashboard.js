@@ -94,7 +94,7 @@ function connect(form) {
     notify('connected');
     $('mqtt-connect').disabled = true;
     $('mqtt-disconnect').disabled = false;
-    c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`], { qos: 1 });
+    c.subscribe([`${base}/+/info`, `${base}/+/status`, `${base}/+/relay/+/state`, `${base}/+/telemetry`, `${base}/+/schedule`, `${base}/+/sensor`], { qos: 1 });
     monitorFilter = null;
     subscribeMonitor($('mon-filter').value.trim() || '#');
     render();
@@ -229,7 +229,7 @@ function onMessage(topic, payload, packet) {
   if (!topic.startsWith(`${base}/`)) return;
   const rest = topic.slice(base.length + 1).split('/');   // [id, kind, ...]
   const [id, kind] = rest;
-  if (!['info', 'status', 'telemetry', 'relay', 'schedule'].includes(kind)) return;
+  if (!['info', 'status', 'telemetry', 'relay', 'schedule', 'sensor'].includes(kind)) return;
   if ((kind === 'relay' && rest[3] !== 'state') || (kind === 'schedule' && rest.length !== 2)) return;   // commands, not state
 
   // empty retained payload = device was "forgotten"
@@ -248,6 +248,9 @@ function onMessage(topic, payload, packet) {
     if (firstSeen) client?.publish(`${base}/${id}/cmd`, 'ping', { qos: 0 });
   } else if (kind === 'status') {
     d.status = text;
+  } else if (kind === 'sensor') {
+    try { d.sensor = JSON.parse(text); } catch { return; }
+    if (d.sensor.ok && Number.isFinite(d.sensor.t)) recordSensor(id, d.sensor, packet?.retain);
   } else if (kind === 'telemetry') {
     try { d.telemetry = JSON.parse(text); } catch { return; }
     if (id === schedId) renderClock();
@@ -459,6 +462,7 @@ function renderDevice(id, d) {
       el('span', {}, `เวลาบอร์ด ${t?.time ? t.time.slice(11, 16) : '—'}`),
       el('span', {}, `Seen ${ago(d.seen)}`),
     ),
+    sensorBlock(id, d),
     el('div', { class: 'relays' }, relays.map(r => {
       const on = !!d.states[r.ch];
       const pending = !!d.pending[r.ch];
@@ -484,6 +488,73 @@ function renderDevice(id, d) {
       el('button', { class: 'btn small', disabled: !online, onclick: () => confirm(`รีบูต ${id}?`) && deviceCmd(id, 'reboot') }, 'รีบูต'),
       el('button', { class: 'btn small danger', onclick: () => forget(id) }, 'Forget'),
     ),
+  );
+}
+
+// ---------- SHT31 temperature / humidity ----------
+// The board publishes a retained reading every 15 s. This browser keeps one point per minute
+// for 24 h (localStorage) so the mini graphs survive a page reload.
+const HIST_KEY = 'hub.sensorHist';
+const HIST_MAX = 24 * 60;
+let sensorHistAll = store(HIST_KEY) || {};
+
+function recordSensor(id, s, retained) {
+  const key = `${base}/${id}`;
+  const list = sensorHistAll[key] ||= [];
+  const now = Date.now();
+  const last = list[list.length - 1];
+  // a retained copy may be old: only log it if we have nothing yet
+  if (retained && last) return;
+  if (last && now - last[0] < 60000) { last[1] = s.t; last[2] = s.h; }   // same minute: keep the newest
+  else list.push([now, s.t, s.h]);
+  while (list.length && (list.length > HIST_MAX || now - list[0][0] > 864e5)) list.shift();
+  store(HIST_KEY, sensorHistAll);
+}
+
+function sparkline(points, idx, unit, cls) {
+  if (points.length < 2) return el('div', { class: 'spark-empty muted' }, 'กำลังเก็บข้อมูลกราฟ…');
+  const W = 220, H = 44, P = 3;
+  const vals = points.map(p => p[idx]);
+  let lo = Math.min(...vals), hi = Math.max(...vals);
+  if (hi - lo < 1) { const m = (hi + lo) / 2; lo = m - 0.5; hi = m + 0.5; }
+  const t0 = points[0][0], t1 = points[points.length - 1][0] || t0 + 1;
+  const xy = points.map(p => `${(P + (W - 2 * P) * (p[0] - t0) / Math.max(1, t1 - t0)).toFixed(1)},${(H - P - (H - 2 * P) * (p[idx] - lo) / (hi - lo)).toFixed(1)}`).join(' ');
+  const NS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(NS, 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', `spark ${cls}`);
+  svg.setAttribute('preserveAspectRatio', 'none');
+  const line = document.createElementNS(NS, 'polyline');
+  line.setAttribute('points', xy);
+  svg.append(line);
+  const hrs = (t1 - t0) / 36e5;
+  const span = hrs >= 1 ? `${hrs.toFixed(hrs < 10 ? 1 : 0)} ชม.` : `${Math.max(1, Math.round(hrs * 60))} นาที`;
+  return el('div', { class: 'spark-wrap' }, svg,
+    el('div', { class: 'spark-axis muted' },
+      el('span', { title: 'ต่ำสุด' }, `↓${Math.min(...vals).toFixed(1)}${unit}`),
+      el('span', { title: 'ช่วงเวลาของกราฟ' }, span),
+      el('span', { title: 'สูงสุด' }, `↑${Math.max(...vals).toFixed(1)}${unit}`)));
+}
+
+function sensorBlock(id, d) {
+  const s = d.sensor;
+  if (!s) return null;
+  if (!s.ok) {
+    return el('div', { class: 'sensor sensor-bad' },
+      el('b', {}, '⚠ เซ็นเซอร์ SHT31 ไม่ตอบ'),
+      el('span', {}, ' — ตรวจสาย VIN→3V3, GND→GND, SCL→GPIO22, SDA→GPIO21 แล้วรอ 30 วินาที'));
+  }
+  const hist = sensorHistAll[`${base}/${id}`] || [];
+  const stale = d.status !== 'online';
+  return el('div', { class: `sensor${stale ? ' stale' : ''}`, title: stale ? 'บอร์ดออฟไลน์ — ค่าล่าสุดที่ได้รับ' : 'SHT31 · อัปเดตทุก 15 วินาที' },
+    el('div', { class: 'sensor-item temp' },
+      el('div', { class: 'sensor-lbl' }, '🌡 อุณหภูมิ'),
+      el('div', { class: 'sensor-val' }, el('b', {}, s.t.toFixed(1)), ' °C'),
+      sparkline(hist, 1, '°', 'temp')),
+    el('div', { class: 'sensor-item hum' },
+      el('div', { class: 'sensor-lbl' }, '💧 ความชื้น'),
+      el('div', { class: 'sensor-val' }, el('b', {}, s.h.toFixed(1)), ' %RH'),
+      sparkline(hist, 2, '%', 'hum')),
   );
 }
 

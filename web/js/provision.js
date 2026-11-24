@@ -1,7 +1,7 @@
 // USB provisioning over Web Serial. Protocol: docs/DESIGN.md §3.2 (newline-delimited JSON @115200)
 import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErrorHint, store } from './util.js';
 import { createPinPicker, headerPosition, DEFAULT_PINS } from './pin-picker.js';
-import { getPins, setPins, onPins } from './pins-state.js';
+import { getPins, setPins, onPins, sensorWired, getSensorWanted, setSensorWanted, SENSOR_PINS } from './pins-state.js';
 import { renderWiring } from './wiring.js';
 
 const $ = id => document.getElementById(id);
@@ -209,6 +209,7 @@ function showInfo(info) {
     ['MAC', info.mac],
     ['Device ID', info.device_id],
     ['Wi-Fi', `${WIFI_STATE[info.wifi] || info.wifi}${info.wifi === 'connected' && info.wifi_ssid ? ` “${info.wifi_ssid}”` : ''}${info.ip ? ` · ${info.ip} · ${info.rssi} dBm` : ''}`],
+    ...(info.sensor ? [['เซ็นเซอร์ SHT31', sensorText(info.sensor)]] : []),
     ...(info.ap_ssid ? [['ตั้งค่าผ่านมือถือ', `Wi-Fi “${info.ap_ssid}” · รหัส ${info.ap_pass}${info.portal ? ' · เปิดอยู่' : ''}`]] : []),
     ['MQTT', info.mqtt_host ? `${info.mqtt_host}:${info.mqtt_port} · ${info.mqtt ? 'connected' : 'not connected'}` : 'ยังไม่ตั้งค่า'],
   ];
@@ -233,9 +234,17 @@ function showInfo(info) {
   $('prov-fields').disabled = false;
   buildHostPresets();
 
+  if (info.sensor?.present) setSensorWanted(true);   // a sensor is plugged in: show it in the wiring diagrams
   renderPinMap(info);
   syncPicker(info);
   renderSavedNets(info);
+}
+
+function sensorText(s) {
+  if (!s.enabled) return 'ปิดอยู่ — GPIO21/22 ถูกใช้เป็นขารีเลย์ (เอาออกจากรีเลย์ถ้าจะใช้เซ็นเซอร์)';
+  if (s.ok) return `${s.t} °C · ${s.h} %RH (I²C 0x${Number(s.addr).toString(16).toUpperCase()})`;
+  if (s.present) return `ต่ออยู่แต่อ่านค่าไม่ได้ (${s.error || 'error'}) — ตรวจสาย`;
+  return 'ไม่พบ (ไม่บังคับ) — ต่อ VIN→3V3, GND→GND, SCL→GPIO22, SDA→GPIO21';
 }
 
 const WIFI_STATE = {
@@ -431,7 +440,7 @@ let picker;
 function initPicker() {
   picker = createPinPicker($('pin-picker'), { onChange: renderPickList });
   picker.setPins(getPins());                       // last selection in this browser
-  onPins(pins => renderWiring($('pick-wiring'), pins));
+  onPins(pins => renderWiring($('pick-wiring'), pins, { sensor: sensorWired() }));
   $('pick-default').addEventListener('click', () => { picker.setPins(DEFAULT_PINS); renderPickList(); });
   $('pick-clear').addEventListener('click', () => { picker.setPins([]); renderPickList(); });
   $('pick-save').addEventListener('click', savePins);
@@ -444,7 +453,10 @@ function renderPickList() {
   $('pick-count').textContent = `${pins.length} ช่อง`;
   $('pick-list').replaceChildren(...(pins.length
     ? pins.map((g, i) => el('li', {}, el('b', {}, `CH${i + 1}`), ` → GPIO${g}`, el('span', { class: 'muted' }, ` · ${headerPosition(g)}`)))
-    : [el('li', { class: 'muted' }, 'ยังไม่ได้เลือก — คลิกขาสีเขียวบนรูป')]));
+    : [el('li', { class: 'muted' }, 'ยังไม่ได้เลือก — คลิกขาสีเขียวบนรูป')]),
+    ...(getSensorWanted() && pins.some(p => SENSOR_PINS.includes(p))
+      ? [el('li', { class: 'warn-ink' }, '⚠ GPIO21/22 เป็นขาของเซ็นเซอร์ SHT31 (SDA/SCL) — ถ้าใช้เป็นรีเลย์ บอร์ดจะปิดการอ่านเซ็นเซอร์')]
+      : []));
   const changed = lastInfo?.relay_pins && pins.join() !== lastInfo.relay_pins.join();
   $('pick-save').disabled = !port || !lastInfo?.safe_pins || !pins.length || !changed;
 }

@@ -110,6 +110,7 @@ Web ─ requestPort() ─► esptool-js: DTR/RTS reset เข้า ROM bootload
 | `<base>/<id>/relay/<n>/state` | ESP→ | `ON` / `OFF` | 1 | ✔ | n = 1..8 |
 | `<base>/<id>/relay/<n>/set` | →ESP | `ON` / `OFF` / `TOGGLE` | 1 | ✘ | **ห้าม retain** (กันสั่งซ้ำตอน reconnect) |
 | `<base>/<id>/telemetry` | ESP→ | JSON: `{rssi, uptime, heap, ip}` | 0 | ✘ | ทุก 30 วินาที |
+| `<base>/<id>/sensor` | ESP→ | `{"type":"SHT3x","ok":true,"t":28.4,"h":61.2}` / `{"ok":false,"error":"no_ack"}` | 0 | ✔ | SHT31 ทุก 15 s (I²C SDA 21 / SCL 22, single-shot 0x2400 + CRC-8) |
 | `<base>/<id>/cmd` | →ESP | `reboot` / `ping` / `all_off` | 1 | ✘ | คำสั่งระดับอุปกรณ์ |
 | `<base>/<id>/schedule/set` | →ESP | JSON array ของ rule (ดู §3.8) | 1 | ✘ | แทนที่ตารางเวลาทั้งหมด |
 | `<base>/<id>/schedule` | ESP→ | `{tz, time, rules:[…]}` | 1 | ✔ | ตารางเวลาที่ใช้งานจริง; ถ้าคำสั่งผิดจะส่งแบบไม่ retain พร้อม `error` |

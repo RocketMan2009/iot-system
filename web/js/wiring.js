@@ -14,7 +14,13 @@ function s(tag, attrs = {}, ...children) {
 // Distinct, readable on light and dark backgrounds.
 const WIRE_COLORS = ['#eab308', '#f97316', '#22c55e', '#06b6d4', '#a855f7', '#ec4899', '#84cc16', '#14b8a6',
   '#f43f5e', '#8b5cf6', '#0ea5e9', '#d946ef', '#facc15', '#10b981', '#fb923c'];
-export const wireColor = i => WIRE_COLORS[i % WIRE_COLORS.length];
+// With the SHT31 drawn, yellow and purple belong to its SDA/SCL wires, so relays skip them.
+const NO_SENSOR_HUES = new Set(['#eab308', '#facc15', '#a855f7', '#8b5cf6', '#d946ef']);
+const RELAY_COLORS_WITH_SENSOR = WIRE_COLORS.filter(c => !NO_SENSOR_HUES.has(c));
+export const wireColor = (i, sensor = false) => {
+  const list = sensor ? RELAY_COLORS_WITH_SENSOR : WIRE_COLORS;
+  return list[i % list.length];
+};
 const RED = '#dc2626', BLACK = 'var(--wire-gnd)', BLUE = '#2563eb';
 
 // ---- layout constants ----
@@ -51,6 +57,7 @@ function fanIcon(x, y) {
 /**
  * Renders the wiring for `pins` into `container` (replacing its content).
  * opts.names: { [ch]: "ชื่อโหลด" } optional labels for loads.
+ * opts.sensor: also draw the SHT31 module (I2C: SDA GPIO21, SCL GPIO22) above the board.
  */
 export function renderWiring(container, pins, opts = {}) {
   const n = pins.length;
@@ -59,6 +66,8 @@ export function renderWiring(container, pins, opts = {}) {
     return;
   }
 
+  const sensor = !!opts.sensor;
+  const OFF = sensor ? SENSOR_SPACE : 0;            // everything below moves down to make room for the sensor
   const MOD_TOP = BOARD_TOP + 30;
   const vccY = MOD_TOP + 34, gndY = MOD_TOP + 60;
   const chY = k => MOD_TOP + 106 + k * ROW;          // IN pin / COM terminal of channel k
@@ -66,12 +75,13 @@ export function renderWiring(container, pins, opts = {}) {
 
   // ---- wires: source header pin -> module header pin ----
   const wires = [
-    { label: 'GND', side: 'R', idx: 0, ty: gndY, color: BLACK, cls: 'gnd', title: 'GND (บอร์ด) → GND ของโมดูลรีเลย์' },
+    // with the sensor, its GND takes the top-right GND pin and the relay module uses the one next to GPIO21
+    { label: 'GND', side: 'R', idx: sensor ? 6 : 0, ty: gndY, color: BLACK, cls: 'gnd', title: 'GND (บอร์ด) → GND ของโมดูลรีเลย์' },
     { label: '5V', side: 'L', idx: 18, ty: vccY, color: RED, cls: 'vcc', title: '5V (บอร์ด) → VCC ของโมดูลรีเลย์' },
     ...pins.map((g, k) => {
       const l = J2.indexOf(g), r = J3.indexOf(g);
       return {
-        label: `GPIO${g}`, side: l >= 0 ? 'L' : 'R', idx: l >= 0 ? l : r, ty: chY(k), color: wireColor(k), ch: k + 1, gpio: g,
+        label: `GPIO${g}`, side: l >= 0 ? 'L' : 'R', idx: l >= 0 ? l : r, ty: chY(k), color: wireColor(k, sensor), ch: k + 1, gpio: g,
         title: `GPIO${g} → IN${k + 1} (รีเลย์ช่อง ${k + 1})`,
       };
     }),
@@ -83,10 +93,13 @@ export function renderWiring(container, pins, opts = {}) {
   leftWires.forEach((w, j) => { w.lx = LX - TAG_W - 30 - j * 9; w.by = BOARD_BOTTOM + 18 + j * 10; });
 
   const lowest = Math.max(BOARD_BOTTOM + 18 + leftWires.length * 10, MOD_BOTTOM);
-  const H = lowest + 70;
+  const H = lowest + 70 + OFF;
 
-  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'wiring', role: 'img',
-    'aria-label': `วงจรต่อ ESP32 กับโมดูลรีเลย์ ${n} ช่อง` });
+  const sensorWires = sensor ? SENSOR_WIRES : [];
+  const root = s('svg', { viewBox: `0 0 ${W} ${H}`, class: 'wiring', role: 'img',
+    'aria-label': `วงจรต่อ ESP32 กับโมดูลรีเลย์ ${n} ช่อง${sensor ? ' และเซ็นเซอร์ SHT31' : ''}` });
+  const svg = s('g', { transform: `translate(0 ${OFF})` });
+  root.append(svg);
 
   // ---- ESP32-DevKitC ----
   const board = s('g', { class: 'w-board' });
@@ -104,7 +117,7 @@ export function renderWiring(container, pins, opts = {}) {
     s('text', { class: 'tiny', x: LX + 18, y: BOARD_BOTTOM - 36, 'text-anchor': 'middle' }, 'EN'),
     s('text', { class: 'tiny', x: RX - 18, y: BOARD_BOTTOM - 36, 'text-anchor': 'middle' }, 'BOOT'),
   );
-  const used = new Map(wires.map(w => [`${w.side}${w.idx}`, w]));
+  const used = new Map([...wires, ...sensorWires].map(w => [`${w.side}${w.idx}`, w]));
   const header = (list, side) => list.forEach((p, i) => {
     const y = pinY(i);
     const x = side === 'L' ? LX : RX;
@@ -202,19 +215,73 @@ export function renderWiring(container, pins, opts = {}) {
   }
   svg.append(wireLayer);
 
-  container.replaceChildren(svg);
+  if (sensor) root.append(drawSensor(OFF));
+  container.replaceChildren(root);
+}
+
+// ---- SHT31 module (drawn in un-shifted coordinates above the board) ----
+const SENSOR_SPACE = 170;
+const S_X = 432, S_W = 168, S_PIN_Y = SENSOR_SPACE - 40;
+const SCL_COLOR = '#a855f7', SDA_COLOR = '#eab308';
+// Lanes go right-to-left from the lowest header pin, so the three right-side wires never cross each other.
+const SENSOR_WIRES = [
+  { pin: 'VIN', label: '3V3', side: 'L', idx: 0, x: S_X + 24, color: RED, title: '3V3 (บอร์ด) → VIN ของ SHT31 (ห้ามต่อ 5V)' },
+  { pin: 'GND', label: 'GND', side: 'R', idx: 0, x: S_X + 60, color: BLACK, cls: 'gnd', title: 'GND (บอร์ด) → GND ของ SHT31' },
+  { pin: 'SCL', label: 'GPIO22', side: 'R', idx: 2, x: S_X + 96, color: SCL_COLOR, title: 'GPIO22 → SCL ของ SHT31 (I²C clock)' },
+  { pin: 'SDA', label: 'GPIO21', side: 'R', idx: 5, x: S_X + 132, color: SDA_COLOR, title: 'GPIO21 → SDA ของ SHT31 (I²C data)' },
+];
+
+function drawSensor(off) {
+  const g = s('g', { class: 'w-sensor' });
+  const top = 22;
+  g.append(
+    s('rect', { class: 'spcb', x: S_X, y: top, width: S_W, height: S_PIN_Y - top + 14, rx: 8 }),
+    s('circle', { class: 'shole', cx: S_X + 24, cy: top + 26, r: 13 }),
+    s('text', { class: 'stitle', x: S_X + 48, y: top + 31 }, 'SHT31'),
+    s('rect', { class: 'schip', x: S_X + 128, y: top + 14, width: 24, height: 24, rx: 3 }),
+    s('text', { class: 'ssub', x: S_X + S_W / 2, y: top + 56, 'text-anchor': 'middle' }, 'อุณหภูมิ / ความชื้น · I²C'),
+    s('text', { class: 'rtitle', x: S_X + S_W + 12, y: top + 30 }, 'เซ็นเซอร์ SHT31 (3.3V)'),
+  );
+  const layer = s('g', { class: 'w-wires' });
+  for (const w of SENSOR_WIRES) {
+    g.append(
+      s('circle', { class: 'rpin', cx: w.x, cy: S_PIN_Y, r: 5 }),
+      s('text', { class: 'rpin-label', x: w.x, y: S_PIN_Y - 10, 'text-anchor': 'middle' }, w.pin));
+    const y = off + pinY(w.idx);
+    let pts;
+    if (w.side === 'L') {
+      const start = LX - 20 - TAG_W, laneX = start - 14, overY = off - 10;
+      pts = [[start, y], [laneX, y], [laneX, overY], [w.x, overY], [w.x, S_PIN_Y]];
+    } else {
+      pts = [[RX + 20 + TAG_W, y], [w.x, y], [w.x, S_PIN_Y]];
+    }
+    const points = pts.map(p => p.join(',')).join(' ');
+    layer.append(s('g', { class: `wire ${w.cls || ''}` },
+      s('title', {}, w.title),
+      s('polyline', { class: 'halo', points }),
+      s('polyline', { class: 'core', points, style: `stroke:${w.color}` }),
+      s('circle', { class: 'end', cx: w.x, cy: S_PIN_Y, r: 4, style: `fill:${w.color}` })));
+  }
+  g.append(layer);
+  return g;
 }
 
 /** Connection table rows matching the diagram. */
-export function wiringTable(pins) {
+export function wiringTable(pins, sensor = false) {
   const row = (color, from, to, note) => el('tr', {},
     el('td', {}, el('span', { class: 'swatch', style: `background:${color}` })),
     el('td', { class: 'mono' }, from), el('td', {}, '→'), el('td', { class: 'mono' }, to), el('td', { class: 'muted' }, note));
   return el('table', { class: 'pinmap wiring-table' },
-    el('thead', {}, el('tr', {}, el('th', {}), el('th', {}, 'ESP32-DevKitC'), el('th', {}), el('th', {}, 'โมดูลรีเลย์'), el('th', {}, 'หมายเหตุ'))),
+    el('thead', {}, el('tr', {}, el('th', {}), el('th', {}, 'ESP32-DevKitC'), el('th', {}), el('th', {}, 'ต่อไปที่'), el('th', {}, 'หมายเหตุ'))),
     el('tbody', {},
-      row(RED, '5V (J2 ขาที่ 19)', 'VCC / DC+', 'ไฟเลี้ยงคอยล์รีเลย์'),
-      row('#1f2328', 'GND (J3 ขาที่ 1)', 'GND / DC-', 'กราวด์ร่วม'),
-      ...pins.map((g, k) => row(wireColor(k), `GPIO${g} (${J2.includes(g) ? `J2 ขาที่ ${J2.indexOf(g) + 1}` : `J3 ขาที่ ${J3.indexOf(g) + 1}`})`, `IN${k + 1}`, `สั่งรีเลย์ช่อง ${k + 1}`)),
+      row(RED, '5V (J2 ขาที่ 19)', 'รีเลย์ VCC / DC+', 'ไฟเลี้ยงคอยล์รีเลย์'),
+      row('#1f2328', sensor ? 'GND (J3 ขาที่ 7)' : 'GND (J3 ขาที่ 1)', 'รีเลย์ GND / DC-', 'กราวด์ร่วม'),
+      ...pins.map((g, k) => row(wireColor(k, sensor),`GPIO${g} (${J2.includes(g) ? `J2 ขาที่ ${J2.indexOf(g) + 1}` : `J3 ขาที่ ${J3.indexOf(g) + 1}`})`, `รีเลย์ IN${k + 1}`, `สั่งรีเลย์ช่อง ${k + 1}`)),
+      ...(sensor ? [
+        row(RED, '3V3 (J2 ขาที่ 1)', 'SHT31 VIN', 'ไฟเลี้ยงเซ็นเซอร์ 3.3V (ห้ามใช้ 5V)'),
+        row('#1f2328', 'GND (J3 ขาที่ 1)', 'SHT31 GND', 'กราวด์'),
+        row(SCL_COLOR, 'GPIO22 (J3 ขาที่ 3)', 'SHT31 SCL', 'I²C clock'),
+        row(SDA_COLOR, 'GPIO21 (J3 ขาที่ 6)', 'SHT31 SDA', 'I²C data'),
+      ] : []),
     ));
 }

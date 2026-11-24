@@ -1,7 +1,7 @@
 import { initDashboard } from './mqtt-dashboard.js';
 import { initProvision } from './provision.js';
 import { initFlasher } from './flasher.js';
-import { onPins } from './pins-state.js';
+import { onPins, sensorWired, getSensorWanted, setSensorWanted } from './pins-state.js';
 import { renderWiring, wiringTable } from './wiring.js';
 import { initWizard } from './wizard.js';
 import { store } from './util.js';
@@ -30,10 +30,14 @@ initWizard(document.getElementById('wizard'), showTab);
 // ---------- overview: wiring follows the relay pin selection ----------
 const $ = id => document.getElementById(id);
 onPins(pins => {
-  renderWiring($('ov-wiring'), pins);
-  $('ov-wiring-table').replaceChildren(wiringTable(pins));
-  $('ov-wiring-count').textContent = `รีเลย์ ${pins.length} ช่อง`;
+  const sensor = sensorWired();
+  renderWiring($('ov-wiring'), pins, { sensor });
+  $('ov-wiring-table').replaceChildren(wiringTable(pins, sensor));
+  $('ov-wiring-count').textContent = `รีเลย์ ${pins.length} ช่อง${sensor ? ' + SHT31' : ''}`;
+  $('ov-sensor').checked = getSensorWanted();
+  $('ov-sensor-note').hidden = !getSensorWanted() || sensor;
 });
+$('ov-sensor').addEventListener('change', e => setSensorWanted(e.target.checked));
 $('ov-edit-pins').addEventListener('click', () => {
   showTab('provision');
   $('pin-picker').scrollIntoView({ behavior: 'smooth', block: 'start' });
