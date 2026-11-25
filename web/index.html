@@ -46,9 +46,12 @@
           <span id="mqtt-status" class="pill off">Disconnected</span>
         </div>
         <form id="mqtt-form" class="grid-form" autocomplete="off">
-          <label class="span2">WebSocket URL
+          <label class="span2">ผู้ให้บริการ broker
+            <select name="provider" id="mqtt-provider"></select>
+          </label>
+          <label class="span2"><span id="mqtt-url-label">WebSocket URL</span>
             <input name="url" placeholder="ws://192.168.1.10:9001" required />
-            <small class="field-note">HiveMQ Cloud: คัดลอก “TLS Websocket URL” มาวางได้เลย — ระบบเติม wss:// ให้เอง</small>
+            <small class="field-note" id="mqtt-url-note"></small>
           </label>
           <label>Username <input name="username" /></label>
           <label>Password <input name="password" type="password" /></label>
@@ -177,7 +180,7 @@
               <label class="span2">MQTT Host (IP / hostname)
                 <div class="row host-row">
                   <select id="mqtt-preset" aria-label="เลือก broker"></select>
-                  <input name="mqtt_host" list="mqtt-host-list" placeholder="xxxx.s1.eu.hivemq.cloud" autocomplete="off" />
+                  <input name="mqtt_host" list="mqtt-host-list" placeholder="เช่น xxxx.s1.eu.hivemq.cloud หรือ xxxx.ala.asia-southeast1.emqxsl.com" autocomplete="off" />
                   <datalist id="mqtt-host-list"></datalist>
                 </div>
                 <span id="mqtt-preset-note" class="field-note"></span>

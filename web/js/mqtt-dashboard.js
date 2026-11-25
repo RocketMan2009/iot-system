@@ -1,5 +1,8 @@
 // MQTT dashboard: discovery + relay control. Topic contract: docs/DESIGN.md §3.1
 import { toast, setPill, store, el, fmtUptime } from './util.js';
+import { PROVIDERS, CUSTOM, providerById, providerForHost, normalizeWsUrl, wsUrlFor, boardBrokerFor } from './brokers.js';
+
+export { normalizeWsUrl };
 
 const PENDING_TIMEOUT_MS = 3000;
 
@@ -15,12 +18,7 @@ export function initDashboard() {
   const saved = store('hub.mqtt') || {};
   for (const k of ['url', 'username', 'password', 'base']) if (saved[k]) form.elements[k].value = saved[k];
   form.elements.remember.checked = !!saved.password;
-  // https pages can only reach brokers over wss:// (e.g. HiveMQ Cloud: wss://<cluster>:8884/mqtt)
-  form.elements.url.placeholder = location.protocol === 'https:'
-    ? 'wss://xxxx.s1.eu.hivemq.cloud:8884/mqtt'
-    : 'ws://192.168.1.10:9001';
-  if (!saved.url && location.protocol !== 'https:') form.elements.url.value = `ws://${location.hostname || 'localhost'}:9001`;
-
+  initProviderPicker(form, saved);
   form.addEventListener('submit', e => { e.preventDefault(); connect(form); });
   $('mqtt-disconnect').addEventListener('click', disconnect);
   $('mon-form').addEventListener('submit', e => { e.preventDefault(); subscribeMonitor($('mon-filter').value.trim() || '#'); });
@@ -36,34 +34,82 @@ export function initDashboard() {
   else if (saved.url) setPill($('mqtt-status'), 'ใส่รหัสผ่านแล้วกดเชื่อมต่อ', 'busy');
 }
 
-// HiveMQ's copy buttons give "xxxx.hivemq.cloud:8884/mqtt" without a scheme, and people paste the
-// MQTT URL / host instead of the WebSocket one. Turn all of those into a working wss:// URL.
-export function normalizeWsUrl(value) {
-  let s = (value || '').trim();
-  if (!s) return s;
-  s = s.replace(/^mqtts?:\/\//i, 'wss://');
-  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(s)) s = (location.protocol === 'https:' || /hivemq\.cloud/i.test(s) ? 'wss://' : 'ws://') + s;
-  try {
-    const u = new URL(s);
-    if (/hivemq\.cloud$/i.test(u.hostname)) {
-      return `wss://${u.hostname}:8884/mqtt`;   // the only WebSocket endpoint HiveMQ Cloud offers
+// ---------- broker provider picker ----------
+// Each provider has its own WebSocket port/path; picking one fills/fixes the URL, and a pasted
+// host is recognised and switches the picker by itself.
+const hostOf = url => { try { return new URL(/^[a-z]+:\/\//i.test(url) ? url : `wss://${url}`).hostname; } catch { return ''; } };
+
+function initProviderPicker(form, saved) {
+  const sel = form.elements.provider;
+  const opt = p => el('option', { value: p.id }, p.name);
+  sel.replaceChildren(
+    el('optgroup', { label: 'Cloud (ใช้ได้ทุกที่)' }, PROVIDERS.filter(p => !p.public && p.id !== 'lan').map(opt)),
+    el('optgroup', { label: 'ในบ้าน' }, opt(providerById('lan'))),
+    el('optgroup', { label: 'ทดสอบ (สาธารณะ ไม่ต้องสมัคร)' }, PROVIDERS.filter(p => p.public).map(opt)),
+    el('optgroup', { label: 'อื่นๆ' }, opt(CUSTOM)));
+  const detected = providerForHost(hostOf(saved.url || ''));
+  sel.value = detected?.id || saved.provider || (location.protocol === 'https:' ? 'hivemq' : 'lan');
+  if (!saved.url && location.protocol !== 'https:') form.elements.url.value = `ws://${location.hostname || 'localhost'}:9001`;
+  showProviderHelp(form);
+
+  sel.addEventListener('change', () => {
+    const p = providerById(sel.value);
+    const url = form.elements.url;
+    if (p.fixedHost) {
+      url.value = wsUrlFor(p, p.fixedHost);
+      form.elements.username.value = '';
+      form.elements.password.value = '';
+    } else {
+      const h = hostOf(url.value.trim());
+      // keep the host the user typed unless it belongs to another known provider
+      const other = providerForHost(h);
+      if (h && p.id !== 'custom' && (!other || other.id === p.id)) url.value = wsUrlFor(p, h);
+      else if (other && other.id !== p.id) url.value = '';
     }
-    return s;
-  } catch {
-    return s;
+    showProviderHelp(form);
+    if (!url.value) url.focus();
+  });
+  form.elements.url.addEventListener('change', () => {
+    const p = providerForHost(hostOf(form.elements.url.value.trim()));
+    if (p && p.id !== sel.value) { sel.value = p.id; }
+    const fixed = normalizeWsUrl(form.elements.url.value, sel.value);
+    if (fixed) form.elements.url.value = fixed;
+    showProviderHelp(form);
+  });
+}
+
+function showProviderHelp(form) {
+  const p = providerById(form.elements.provider.value);
+  const url = form.elements.url;
+  const note = $('mqtt-url-note');
+  if (p.public) {
+    url.placeholder = wsUrlFor(p, p.fixedHost);
+    note.replaceChildren('⚠ broker สาธารณะ: ไม่ต้องสมัคร/ไม่ต้องมี Username แต่ใครก็อ่าน/สั่ง topic ได้ — ใช้ทดสอบเท่านั้น และตั้ง Base topic ให้ไม่ซ้ำใคร · บอร์ดใช้ ',
+      el('code', {}, `${p.fixedHost}:${p.mqtt.port}`), ' ไม่ติ๊ก TLS');
+    return;
   }
+  if (p.id === 'custom') {
+    url.placeholder = 'wss://broker.example.com:8084/mqtt';
+    note.replaceChildren('ใส่ WebSocket URL เต็ม (wss://host:port/path) · ', p.where);
+    return;
+  }
+  url.placeholder = wsUrlFor(p, p.example);
+  note.replaceChildren('วางชื่อ host อย่างเดียวได้ เช่น ', el('code', {}, p.example), ` — ระบบเติม ${p.ws.plain ? 'ws' : 'wss'}://…:${p.ws.port}${p.ws.path} ให้เอง · ดูชื่อ host ที่ ${p.where} · บอร์ดใช้พอร์ต `,
+    el('code', {}, String(p.mqtt.port)), p.mqtt.tls ? ' + ติ๊ก TLS' : ' ไม่ติ๊ก TLS');
 }
 
 function connect(form) {
   if (typeof mqtt === 'undefined') { toast('โหลดไลบรารี mqtt.js ไม่สำเร็จ (ตรวจอินเทอร์เน็ต)'); return; }
-  const fixed = normalizeWsUrl(form.elements.url.value);
+  const detected = providerForHost(hostOf(form.elements.url.value.trim()));
+  if (detected) form.elements.provider.value = detected.id;
+  const fixed = normalizeWsUrl(form.elements.url.value, form.elements.provider.value);
   if (fixed && fixed !== form.elements.url.value.trim()) {
     form.elements.url.value = fixed;
     toast(`ปรับ WebSocket URL ให้ถูกรูปแบบแล้ว: ${fixed}`, 5000);
   }
   const f = Object.fromEntries(new FormData(form));
   base = f.base.replace(/\/+$/, '');
-  store('hub.mqtt', { url: f.url, username: f.username, base, password: f.remember ? f.password : '' });
+  store('hub.mqtt', { url: f.url, provider: f.provider, username: f.username, base, password: f.remember ? f.password : '' });
 
   if (location.protocol === 'https:' && f.url.startsWith('ws://')) {
     toast('หน้าเว็บเป็น https:// ต้องใช้ wss:// (เบราว์เซอร์บล็อก ws://)', 5000);
@@ -75,7 +121,7 @@ function connect(form) {
 
   setPill($('mqtt-status'), 'Connecting…', 'busy');
   notify('connecting');
-  conn = { url: f.url, username: f.username, attempts: 0, error: '', authFailed: false, connectedAt: 0 };
+  conn = { url: f.url, provider: f.provider, username: f.username, attempts: 0, error: '', authFailed: false, connectedAt: 0 };
   otherBases.clear();
   const c = mqtt.connect(f.url, {
     username: f.username || undefined,
@@ -152,32 +198,39 @@ function boardSearchHelp() {
       }, `ใช้ “${b}”  (${[...ids].join(', ')})`))));
   }
   if (Date.now() - conn.connectedAt < 3000) return el('div', { class: 'muted' }, 'กำลังค้นหาบอร์ด…');
-  let host = '';
-  try { host = new URL(conn.url).hostname; } catch {}
+  const bb = boardBrokerFor(conn.url);
+  const host = bb?.host || '';
+  const prov = bb?.provider || providerById(conn.provider);
   return el('div', { class: 'diag' },
     el('b', {}, 'ยังไม่มีบอร์ดเชื่อมต่อ broker นี้'),
     el('p', { class: 'small-note' }, 'หน้าเว็บเชื่อมต่อแล้ว แต่ยังไม่มีบอร์ดตัวไหนส่งข้อมูลมาที่ broker นี้เลย (ไม่ว่าจะ Base topic ไหน) — ให้ตั้งค่าบอร์ดใหม่:'),
     el('ul', { class: 'diag-list' },
-      el('li', {}, 'แท็บ “ตั้งค่าบอร์ด (USB)” → MQTT Host = ', el('code', {}, host || '(ชื่อ cluster)'), ' · Port = ', el('code', {}, '8883'), ' · ติ๊ก TLS'),
-      el('li', {}, 'MQTT Username / Password = บัญชีของบอร์ดใน HiveMQ → Access Management (คนละบัญชีกับหน้าเว็บได้)'),
+      el('li', {}, 'แท็บ “ตั้งค่าบอร์ด (USB)” → MQTT Host = ', el('code', {}, host || '(ชื่อ cluster)'), ' · Port = ', el('code', {}, String(bb?.port ?? 8883)), bb?.tls === false ? ' · ไม่ติ๊ก TLS' : ' · ติ๊ก TLS'),
+      prov.public ? el('li', {}, 'MQTT Username / Password = เว้นว่าง (broker สาธารณะ)')
+        : el('li', {}, `MQTT Username / Password = บัญชีของบอร์ดใน ${prov.account} (คนละบัญชีกับหน้าเว็บได้)`),
       el('li', {}, 'Base topic ของบอร์ด = ', el('code', {}, base), ' ให้ตรงกับหน้าเว็บ แล้วกด “บันทึกลงบอร์ด & รีบูต”'),
       el('li', {}, 'หลังบันทึก ดูในช่อง MQTT ของแท็บ USB ว่าขึ้น “connected”')),
   );
 }
 
 /** Things in the settings that are certainly wrong, in plain Thai. */
-function settingProblems({ url, username }) {
+function settingProblems({ url, username, provider }) {
   const out = [];
   let u = null;
-  try { u = new URL(url); } catch { out.push('WebSocket URL ไม่ถูกรูปแบบ — ตัวอย่างที่ถูก: wss://abc123.s1.eu.hivemq.cloud:8884/mqtt'); return out; }
+  try { u = new URL(url); } catch { out.push('WebSocket URL ไม่ถูกรูปแบบ — ต้องเป็น wss://ชื่อhost:พอร์ต/path'); return out; }
   if (location.protocol === 'https:' && u.protocol !== 'wss:') out.push('ต้องขึ้นต้นด้วย wss:// (มี s)');
-  if (/hivemq\.cloud$/i.test(u.hostname)) {
-    if (u.port && u.port !== '8884') out.push(`พอร์ตต้องเป็น 8884 (ตอนนี้ ${u.port}) — 8883 เป็นของบอร์ด ไม่ใช่ของหน้าเว็บ`);
-    if (!u.port) out.push('ต้องมี :8884 ต่อท้ายชื่อ cluster');
-    if (u.pathname !== '/mqtt') out.push('ต้องลงท้ายด้วย /mqtt');
+  const p = providerForHost(u.hostname);
+  if (p && p.id !== 'lan') {
+    const want = String(p.ws.port);
+    if (u.port !== want) out.push(`${p.name}: พอร์ตของหน้าเว็บต้องเป็น ${want}${u.port ? ` (ตอนนี้ ${u.port})` : ' — ยังไม่ได้ใส่ :' + want} · ${p.mqtt.port} เป็นของบอร์ด ไม่ใช่ของหน้าเว็บ`);
+    if (p.ws.path && u.pathname !== p.ws.path) out.push(`ต้องลงท้ายด้วย ${p.ws.path}`);
+  } else if (!p) {
+    if (!u.port) out.push('ไม่มีพอร์ตใน URL — broker ส่วนใหญ่ใช้พอร์ตเฉพาะสำหรับ WebSocket (เช่น 8084, 8884, 8081, 9001)');
+    if (u.pathname === '/' ) out.push('ไม่มี path — broker ส่วนใหญ่ต้องลงท้ายด้วย /mqtt');
   }
-  if (/@/.test(username || '')) out.push('Username เป็นอีเมล — ต้องใช้บัญชีที่สร้างใน HiveMQ → Access Management → Credentials ไม่ใช่ Gmail');
-  if (!username) out.push('ยังไม่ได้ใส่ Username (HiveMQ Cloud ต้องมีบัญชีเสมอ)');
+  const prov = p || providerById(provider);
+  if (/@/.test(username || '')) out.push(`Username เป็นอีเมล — ต้องใช้บัญชี MQTT ที่สร้างใน ${prov.account} ไม่ใช่อีเมลที่ใช้ล็อกอินเว็บ`);
+  if (!username && prov.needsAuth) out.push(`ยังไม่ได้ใส่ Username (${prov.name} ต้องมีบัญชีเสมอ)`);
   return out;
 }
 
@@ -191,12 +244,14 @@ function connectionDiag() {
     el('p', { class: 'small-note' }, explainError(conn) || 'กำลังลองใหม่…'),
     problems.length ? el('ul', { class: 'diag-list' }, problems.map(p => el('li', {}, p))) : null,
     el('p', { class: 'small-note muted' }, 'URL ที่ใช้อยู่: ', el('code', {}, conn.url || '—'), ' · Username: ', el('code', {}, conn.username || '—')),
-    el('p', { class: 'small-note muted' }, 'ตรวจได้ที่ console.hivemq.cloud → Manage Cluster: Overview (ชื่อ cluster) และ Access Management → Credentials (บัญชี)'),
+    (prov => el('p', { class: 'small-note muted' }, `ตรวจชื่อ host ได้ที่ ${prov.where} · บัญชีที่ ${prov.account}`))(providerForHost(hostOf(conn.url)) || providerById(conn.provider)),
   );
 }
 
 function explainError(c) {
-  if (c.authFailed) return 'Username หรือ Password ไม่ถูกต้อง — ใช้บัญชีที่สร้างใน HiveMQ → Access Management → Credentials (ไม่ใช่อีเมล/รหัส Gmail)';
+  const prov = providerForHost(hostOf(c.url)) || providerById(c.provider);
+  if (c.authFailed) return `Username หรือ Password ไม่ถูกต้อง — ใช้บัญชีที่สร้างใน ${prov.account} (ไม่ใช่อีเมล/รหัส Gmail)`;
+  if (/timeout/i.test(c.error)) return `${c.error} — ติดต่อ broker ไม่ได้ในเวลาที่กำหนด: มักเกิดจากพอร์ตหรือ path ผิด หรือ broker ยังไม่พร้อม (เช่น ยังขึ้น Starting)`;
   if (c.error) return `${c.error}`;
   if (c.attempts) return 'ติดต่อ broker ไม่ได้ — ตรวจ WebSocket URL และอินเทอร์เน็ต';
   return '';

@@ -3,6 +3,7 @@ import { toast, setPill, el, appendLog, serialLock, USB_SERIAL_FILTERS, portErro
 import { createPinPicker, headerPosition, DEFAULT_PINS } from './pin-picker.js';
 import { getPins, setPins, onPins, sensorWired, getSensorWanted, setSensorWanted, SENSOR_PINS } from './pins-state.js';
 import { renderWiring } from './wiring.js';
+import { boardBrokerFor, providerForHost } from './brokers.js';
 
 const $ = id => document.getElementById(id);
 const LOCK = 'ตั้งค่าบอร์ด';
@@ -522,20 +523,18 @@ let presetOptions = [];
 
 const isLocalHost = h => /^(localhost|127\.|0\.0\.0\.0$|::1$)/i.test(h);
 
-// The dashboard talks WebSocket (8884 / 9001); the board talks plain MQTT on the same host.
+// The dashboard talks WebSocket; the board talks MQTT/TCP to the same host (port depends on the provider).
 function dashboardBroker() {
   const url = store('hub.mqtt')?.url;
-  if (!url) return null;
-  try {
-    const u = new URL(url);
-    const tls = u.protocol === 'wss:';
-    return {
-      host: u.hostname, port: tls ? 8883 : 1883, tls,
-      label: `ใช้ร่วมกับแดชบอร์ด — ${u.hostname}`,
-      note: tls ? 'บอร์ดใช้ MQTT over TLS พอร์ต 8883 (แดชบอร์ดใช้ WSS พอร์ต 8884 — broker เดียวกัน)'
-                : 'บอร์ดใช้ MQTT พอร์ต 1883 (แดชบอร์ดใช้ WebSocket — broker เดียวกัน)',
-    };
-  } catch { return null; }
+  const b = url && boardBrokerFor(url);
+  if (!b) return null;
+  let wsPort = '';
+  try { wsPort = new URL(url).port; } catch {}
+  return {
+    host: b.host, port: b.port, tls: b.tls,
+    label: `ใช้ร่วมกับแดชบอร์ด — ${b.host}`,
+    note: `บอร์ดใช้ MQTT${b.tls ? ' over TLS' : ''} พอร์ต ${b.port} (แดชบอร์ดใช้ WebSocket${wsPort ? ' พอร์ต ' + wsPort : ''} — broker เดียวกัน)`,
+  };
 }
 
 function rememberBroker(b) {
@@ -567,9 +566,12 @@ function initHostPresets() {
     const changed = host !== f.mqtt_host.value.trim();
     f.mqtt_host.value = host;
     let p = port ? Number(port) : null;
-    if (/^wss?$/i.test(scheme || '') || p === 8884) p = 8883;
-    if (!p && /hivemq\.cloud$/i.test(host)) p = 8883;
-    if (p) { f.mqtt_port.value = p; f.mqtt_tls.checked = p === 8883; }
+    // a WebSocket URL / port was pasted: use the provider's board port instead
+    const prov = providerForHost(host);
+    const wsPorts = [8884, 8084, 8081, 8083, 9001, 443];
+    if (/^wss?$/i.test(scheme || '') || wsPorts.includes(p)) p = prov ? prov.mqtt.port : (scheme === 'ws' ? 1883 : 8883);
+    if (!p && prov) p = prov.mqtt.port;
+    if (p) { f.mqtt_port.value = p; f.mqtt_tls.checked = prov ? prov.mqtt.tls : p === 8883; }
     if (changed) toast(`ใช้ Host = ${host}${p ? `, Port = ${p}` : ''} ให้แล้ว`, 4000);
     syncPresetToHost();
   });
