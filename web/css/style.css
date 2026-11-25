@@ -470,6 +470,12 @@ a.btn { text-decoration: none; display: inline-block; }
 .wz-howto { margin: 0 0 14px; padding-left: 22px; display: grid; gap: 10px; }
 .wz-howto li { padding-left: 4px; line-height: 1.6; }
 .wz-howto .btn { margin-left: 6px; padding: 4px 10px; font-size: .85rem; }
+.wz-provider { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 0 0 16px; }
+.wz-provider-btn { display: grid; gap: 4px; text-align: left; padding: 12px 14px; border: 2px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.wz-provider-btn small { color: var(--muted); line-height: 1.45; }
+.wz-provider-btn:hover { border-color: var(--accent); }
+.wz-provider-btn.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.wz-provider-btn.on b::before { content: "✔ "; color: var(--accent); }
 .wz-tip { margin: 12px 0; padding: 10px 14px; border-radius: 10px; background: color-mix(in srgb, var(--on) 12%, transparent); font-size: .92rem; }
 .wz-tip.warn { background: var(--warn-bg); color: var(--warn-ink); }
 .wz-form { display: grid; gap: 12px; margin: 14px 0; }

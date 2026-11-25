@@ -8,6 +8,39 @@ import { connectBroker, onBrokerChange, brokerConnected, getDevice, sendRelay } 
 import { getPins, setPins } from './pins-state.js';
 import { DEFAULT_PINS } from './pin-picker.js';
 import { renderWiring } from './wiring.js';
+import { providerById, providerForHost, wsUrlFor } from './brokers.js';
+
+// Cloud brokers the wizard walks people through (both free, both sign in with Google).
+const WZ_BROKERS = {
+  hivemq: {
+    label: 'HiveMQ Cloud', console: 'https://console.hivemq.cloud', hostField: 'Cluster URL',
+    lead: 'ฟรี สมัครด้วย Gmail ได้ — เซิร์ฟเวอร์อยู่ยุโรป',
+    howto: () => [
+      ['กดปุ่มนี้เพื่อเปิดเว็บ HiveMQ แล้ว ', el('b', {}, 'สมัคร / เข้าสู่ระบบด้วย Gmail'), ' ได้เลย  ', ext('https://console.hivemq.cloud', 'เปิด HiveMQ Cloud')],
+      ['กด ', el('b', {}, 'Create Cluster'), ' → เลือกแบบ ', el('b', {}, 'Serverless (Free)')],
+      ['กด ', el('b', {}, 'Manage Cluster'), ' → คัดลอก ', el('b', {}, 'Cluster URL'), ' มาวางในช่องด้านล่าง'],
+      ['ไปที่ ', el('b', {}, 'Access Management → Credentials'), ' สร้างบัญชี ', el('b', {}, '2 บัญชี'),
+        ' (บัญชีหน้าเว็บ + บัญชีบอร์ด) เลือก Permission เป็น ', el('b', {}, 'Publish and Subscribe')],
+    ],
+    accounts: 'Access Management → Credentials',
+  },
+  emqx: {
+    label: 'EMQX Cloud', console: 'https://cloud-intl.emqx.com', hostField: 'Address (ชื่อ Deployment)',
+    lead: 'ฟรี สมัครด้วย Google ได้ — เลือกเซิร์ฟเวอร์ในเอเชีย (สิงคโปร์) ได้ ตอบสนองเร็วกว่า',
+    howto: () => [
+      ['กดปุ่มนี้เพื่อเปิดเว็บ EMQX แล้ว ', el('b', {}, 'สมัคร / เข้าสู่ระบบด้วย Google'), '  ', ext('https://cloud-intl.emqx.com', 'เปิด EMQX Cloud')],
+      ['กด ', el('b', {}, 'New Deployment'), ' → เลือก ', el('b', {}, 'Serverless'), ' ภูมิภาค ', el('b', {}, 'Singapore (asia-southeast1)'),
+        ' และตั้ง ', el('b', {}, 'Spend Limit = $0'), ' (ใช้ฟรีไม่เสียเงิน)'],
+      ['รอสถานะเป็น ', el('b', {}, 'Running'), ' แล้วที่หน้า ', el('b', {}, 'Overview'), ' คัดลอก ', el('b', {}, 'Address'),
+        ' (ลงท้ายด้วย ', el('code', {}, '.emqxsl.com'), ') มาวางในช่องด้านล่าง'],
+      ['ไปที่ ', el('b', {}, 'Access Control → Authentication'), ' กด ', el('b', {}, '+ Add'), ' สร้างบัญชี ', el('b', {}, '2 บัญชี'),
+        ' (บัญชีหน้าเว็บ + บัญชีบอร์ด)'],
+    ],
+    accounts: 'Access Control → Authentication',
+  },
+};
+const wzBroker = () => WZ_BROKERS[st.provider] || WZ_BROKERS.hivemq;
+const brokerUrl = () => wsUrlFor(providerById(st.provider in WZ_BROKERS ? st.provider : 'hivemq'), st.host);
 
 const KEY = 'hub.wizard';
 const STEPS = [
@@ -19,7 +52,7 @@ const STEPS = [
   { id: 'test', title: 'ทดลองเปิด-ปิด' },
 ];
 
-let st = { step: 0, done: {}, host: '', webUser: '', boardUser: '', base: 'home', ...(store(KEY) || {}) };
+let st = { step: 0, done: {}, provider: '', host: '', webUser: '', boardUser: '', base: 'home', ...(store(KEY) || {}) };
 let webPass = '';
 let boardPass = '';
 let root, showTab;
@@ -36,7 +69,14 @@ export function initWizard(container, show) {
   showTab = show;
   // prefill from the dashboard if the user already connected once
   const saved = store('hub.mqtt') || {};
-  if (!st.host && saved.url) { try { st.host = new URL(saved.url).hostname; } catch {} }
+  if (!st.host && saved.url) {
+    try {
+      const h = new URL(saved.url).hostname;
+      if (providerForHost(h)?.id in WZ_BROKERS) st.host = h;   // only cloud brokers the wizard knows
+    } catch {}
+  }
+  if (!st.provider) st.provider = providerForHost(st.host)?.id in WZ_BROKERS ? providerForHost(st.host).id
+    : (saved.provider in WZ_BROKERS ? saved.provider : 'hivemq');
   if (!st.webUser && saved.username) st.webUser = saved.username;
   if (saved.base && st.base === 'home') st.base = saved.base;
   webPass = saved.password || '';
@@ -133,7 +173,8 @@ const BODY = {
   },
 
   broker() {
-    const host = el('input', { value: st.host, placeholder: 'เช่น abc123.s1.eu.hivemq.cloud', autocomplete: 'off', spellcheck: 'false' });
+    const B = wzBroker();
+    const host = el('input', { value: st.host, placeholder: `เช่น ${providerById(st.provider).example}`, autocomplete: 'off', spellcheck: 'false' });
     const wu = el('input', { value: st.webUser, placeholder: 'เช่น webadmin', autocomplete: 'off' });
     const wp = el('input', { type: 'password', value: webPass, autocomplete: 'off' });
     const bu = el('input', { value: st.boardUser, placeholder: 'เช่น board1', autocomplete: 'off' });
@@ -141,7 +182,11 @@ const BODY = {
     const base = el('input', { value: st.base, pattern: '[A-Za-z0-9_\\-]{1,32}', autocomplete: 'off' });
     const out = status();
     const persist = () => {
-      st.host = cleanHost(host.value); st.webUser = wu.value.trim(); st.boardUser = bu.value.trim();
+      st.host = cleanHost(host.value);
+      // pasted the other provider's address: follow it
+      const other = providerForHost(st.host)?.id;
+      if (other in WZ_BROKERS && other !== st.provider) { st.provider = other; save(); toast(`ชื่อนี้เป็นของ ${WZ_BROKERS[other].label} — สลับให้แล้ว`); return render(); }
+      st.webUser = wu.value.trim(); st.boardUser = bu.value.trim();
       st.base = base.value.trim() || 'home'; webPass = wp.value; boardPass = bp.value; save();
     };
     [host, wu, wp, bu, bp, base].forEach(i => i.addEventListener('change', persist));
@@ -160,25 +205,30 @@ const BODY = {
     };
     const test = () => {
       persist();
-      if (!st.host || !st.webUser || !webPass) return setStatus(out, 'bad', 'กรอก Cluster URL และบัญชีหน้าเว็บให้ครบก่อน');
+      if (!st.host || !st.webUser || !webPass) return setStatus(out, 'bad', `กรอก ${B.hostField} และบัญชีหน้าเว็บให้ครบก่อน`);
       if (!st.boardUser || !boardPass) return setStatus(out, 'bad', 'กรอกบัญชีบอร์ดด้วย (ใช้ในขั้นที่ 5)');
       setStatus(out, 'wait', 'กำลังเชื่อมต่อ…');
-      waiting = setTimeout(() => { waiting = null; setStatus(out, 'bad', '✘ ไม่ตอบภายใน 12 วินาที — ตรวจ Cluster URL'); }, 12000);
-      connectBroker({ url: `wss://${st.host}:8884/mqtt`, username: st.webUser, password: webPass, base: st.base, remember: true });
+      waiting = setTimeout(() => { waiting = null; setStatus(out, 'bad', `✘ ไม่ตอบภายใน 12 วินาที — ตรวจ ${B.hostField}${st.provider === 'emqx' ? ' และดูว่า Deployment ขึ้น Running แล้ว' : ''}`); }, 12000);
+      connectBroker({ url: brokerUrl(), username: st.webUser, password: webPass, base: st.base, remember: true });
     };
 
     return el('div', {},
-      el('p', { class: 'wz-lead' }, 'MQTT คือ “ตัวกลาง” บนอินเทอร์เน็ตที่ส่งคำสั่งจากเว็บไปถึงบอร์ด เราจะใช้บริการฟรีของ HiveMQ Cloud'),
-      el('ol', { class: 'wz-howto' },
-        el('li', {}, 'กดปุ่มนี้เพื่อเปิดเว็บ HiveMQ แล้ว ', el('b', {}, 'สมัคร / เข้าสู่ระบบด้วย Gmail'), ' ได้เลย  ', ext('https://console.hivemq.cloud', 'เปิด HiveMQ Cloud')),
-        el('li', {}, 'กด ', el('b', {}, 'Create Cluster'), ' → เลือกแบบ ', el('b', {}, 'Serverless (Free)')),
-        el('li', {}, 'กด ', el('b', {}, 'Manage Cluster'), ' → คัดลอก ', el('b', {}, 'Cluster URL'), ' มาวางในช่องด้านล่าง'),
-        el('li', {}, 'ไปที่ ', el('b', {}, 'Access Management → Credentials'), ' สร้างบัญชี ', el('b', {}, '2 บัญชี'),
-          ' (บัญชีหน้าเว็บ + บัญชีบอร์ด) เลือก Permission เป็น ', el('b', {}, 'Publish and Subscribe')),
-      ),
-      warn('Username / Password ตรงนี้คือบัญชีที่ ', el('b', {}, 'สร้างใน Credentials'), ' — ไม่ใช่อีเมลหรือรหัสผ่าน Gmail'),
+      el('p', { class: 'wz-lead' }, 'MQTT คือ “ตัวกลาง” บนอินเทอร์เน็ตที่ส่งคำสั่งจากเว็บไปถึงบอร์ด เลือกบริการฟรีที่ต้องการ:'),
+      el('div', { class: 'wz-provider', role: 'radiogroup' }, Object.entries(WZ_BROKERS).map(([id, b]) => el('button', {
+        type: 'button', role: 'radio', 'aria-checked': String(st.provider === id),
+        class: `wz-provider-btn${st.provider === id ? ' on' : ''}`,
+        onclick: () => {
+          if (st.provider === id) return;
+          persist();
+          st.provider = id;
+          if (providerForHost(st.host)?.id !== id) st.host = '';   // the other provider's address doesn't apply
+          markDone('broker', false); save(); render();
+        },
+      }, el('b', {}, b.label), el('small', {}, b.lead)))),
+      el('ol', { class: 'wz-howto' }, B.howto().map(parts => el('li', {}, ...parts))),
+      warn('Username / Password ตรงนี้คือบัญชีที่สร้างใน ', el('b', {}, B.accounts), ' — ไม่ใช่อีเมลหรือรหัสผ่าน Gmail'),
       el('div', { class: 'wz-form' },
-        field('Cluster URL', host, 'วางได้ทั้งลิงก์ ระบบจะตัดเหลือแค่ชื่อให้เอง'),
+        field(B.hostField, host, 'วางได้ทั้งลิงก์ ระบบจะตัดเหลือแค่ชื่อให้เอง'),
         el('fieldset', { class: 'wz-group' }, el('legend', {}, '① บัญชีหน้าเว็บ'), field('Username', wu), field('Password', wp)),
         el('fieldset', { class: 'wz-group' }, el('legend', {}, '② บัญชีบอร์ด'), field('Username', bu), field('Password', bp,
           'จำไว้ในหน้านี้เท่านั้น จนกว่าจะส่งให้บอร์ดในขั้นที่ 5')),
@@ -305,7 +355,7 @@ const BODY = {
       }
       const info = getBoardInfo();
       const cfg = {
-        wifi_ssid: name, mqtt_host: st.host, mqtt_port: 8883, mqtt_tls: true,
+        wifi_ssid: name, mqtt_host: st.host, mqtt_port: providerById(st.provider).mqtt?.port || 8883, mqtt_tls: true,
         mqtt_user: st.boardUser, mqtt_pass: boardPass, base: st.base,
       };
       if (pass.value && pass.value.length < 8) return setStatus(out, 'bad', 'รหัส Wi-Fi ต้องยาว 8 ตัวขึ้นไป (หรือเว้นว่างถ้าไม่มีรหัส)');
@@ -404,7 +454,7 @@ const BODY = {
 
     if (getBoardInfo()?.device_id) { st.deviceId = getBoardInfo().device_id; save(); }
     if (!brokerConnected() && st.host && st.webUser && webPass) {
-      connectBroker({ url: `wss://${st.host}:8884/mqtt`, username: st.webUser, password: webPass, base: st.base, remember: true });
+      connectBroker({ url: brokerUrl(), username: st.webUser, password: webPass, base: st.base, remember: true });
     }
     queueMicrotask(paint);
 
